@@ -27,8 +27,8 @@ KTX_TEST_KORAIL_ID=... KTX_TEST_KORAIL_PW=... uv run pytest tests/test_e2e.py -v
 
 계정과 키는 `.env`가 아니라 Windows 자격 증명 관리자(keyring, 서비스명 `ktx-macro`)에만 저장됩니다.
 
-릴리스: `git tag v1.0.0 && git push --tags` → GitHub Actions가 exe를 빌드해 Releases에 올립니다.
-Pages: 저장소 Settings → Pages → Source를 **GitHub Actions**로 설정.
+릴리스: `git tag v1.0.1 && git push --tags` → GitHub Actions가 exe를 빌드해 Releases에 올립니다.
+Pages: `main` 푸시마다 `docs/`가 자동 배포됩니다 (워크플로가 Pages를 직접 켭니다). 주소: <https://jaychoi07.github.io/ktx/>
 
 ## 카카오 앱 준비 (앱 만드는 사람이 1회)
 

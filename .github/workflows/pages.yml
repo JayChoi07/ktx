@@ -3,8 +3,7 @@ name: pages
 # docs/ 폴더(설치 안내 페이지)를 GitHub Pages 로 배포한다.
 on:
   push:
-    branches: [main]
-    paths: ["docs/**"]
+    branches: [main]  # 경로 필터 없음: 새 브랜치의 첫 푸시에서는 paths 필터가 동작하지 않아 배포가 안 된다
   workflow_dispatch:
 
 permissions:
