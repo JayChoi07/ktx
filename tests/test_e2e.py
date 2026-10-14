@@ -337,6 +337,8 @@ def test_13_mobile_layout(browser):
     pg.tap("#gear")
     expect(pg.locator("#settings")).to_be_visible()
     assert pg.evaluate("document.querySelector('#settings').getBoundingClientRect().right <= window.innerWidth")
+    pg.wait_for_timeout(400)  # 열림 애니메이션(0.25s)이 끝난 뒤 찍어야 반투명하게 보이지 않는다
+    assert pg.evaluate("getComputedStyle(document.querySelector('#settings')).opacity") == "1"
     pg.screenshot(path=str(SHOTS / "13-mobile-settings.png"))
     pg.tap("#closeSet")
     pg.screenshot(path=str(SHOTS / "13-mobile.png"), full_page=True)
