@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KTX 자동예매</title>
+<style>
+  :root { --bg:#f4f6f9; --card:#fff; --text:#1c2430; --mute:#6b7685; --line:#e3e8ef; --pri:#0b5fff; --ok:#12a150; --warn:#d98a00; --err:#d92d20; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#10141a; --card:#1a2029; --text:#e8edf3; --mute:#8d99a8; --line:#2b3441; --pri:#5b94ff; --ok:#3ccb7f; --warn:#f0b43c; --err:#ff6b5e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,"Malgun Gothic",sans-serif; }
+  main { max-width:880px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:8px 0 16px; }
+  h2 { font-size:15px; margin:0 0 12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--mute); }
+  input, select, button { font:inherit; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); }
+  button { cursor:pointer; background:var(--pri); color:#fff; border-color:var(--pri); }
+  button.ghost { background:transparent; color:var(--text); border-color:var(--line); }
+  button.danger { background:transparent; color:var(--err); border-color:var(--err); }
+  .pill { display:inline-block; padding:2px 10px; border-radius:99px; font-size:12px; border:1px solid var(--line); color:var(--mute); }
+  .pill.ok { color:var(--ok); border-color:var(--ok); } .pill.warn { color:var(--warn); border-color:var(--warn); } .pill.err { color:var(--err); border-color:var(--err); }
+  .status { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:16px; }
+  .job { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; padding:12px 0; border-top:1px solid var(--line); }
+  .job:first-child { border-top:0; padding-top:0; }
+  .job .meta { color:var(--mute); font-size:13px; }
+  .job .res { color:var(--ok); font-weight:600; margin-top:4px; }
+  .actions { display:flex; gap:6px; align-items:start; }
+  .actions button { padding:5px 10px; font-size:13px; }
+  .log { font:12px/1.6 ui-monospace,Consolas,monospace; max-height:260px; overflow:auto; }
+  .log .warn { color:var(--warn); } .log .error { color:var(--err); } .log .ok { color:var(--ok); }
+  .empty { color:var(--mute); }
+  .note { color:var(--mute); font-size:12px; margin-top:8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🚄 KTX 자동예매</h1>
+  <div class="status" id="status"></div>
+
+  <div class="card">
+    <h2>새 감시 추가</h2>
+    <form id="form" class="row">
+      <label>출발역 <select id="dep"></select></label>
+      <label>도착역 <select id="arr"></select></label>
+      <label>날짜 <input type="date" id="date" required></label>
+      <label>시작 <input type="time" id="time_from" value="06:00"></label>
+      <label>종료 <input type="time" id="time_to" value="23:59"></label>
+      <label>좌석 <select id="option"></select></label>
+      <label>열차 <select id="train_type"><option value="KTX">KTX</option><option value="ALL">전체</option></select></label>
+      <label>인원 <input type="number" id="adults" min="1" max="9" value="1" style="width:64px"></label>
+      <button>감시 시작</button>
+    </form>
+    <div class="note">조건에 맞는 열차에 빈자리가 생기면 자동으로 예약하고 카톡으로 알립니다. 결제는 직접 해야 합니다 (코레일톡, 약 10분 내).</div>
+  </div>
+
+  <div class="card"><h2>감시 목록</h2><div id="jobs"></div></div>
+
+  <div class="card">
+    <h2>설정</h2>
+    <div class="row">
+      <label>조회 간격(초, 최소 <span id="minint"></span>) <input type="number" id="interval" step="1" style="width:100px"></label>
+      <button class="ghost" id="saveInt">저장</button>
+      <button class="ghost" id="kakaoTest">카톡 테스트 전송</button>
+    </div>
+    <div class="note">간격을 너무 짧게 하면 코레일이 매크로로 판단해 계정/IP를 제한할 수 있습니다.</div>
+  </div>
+
+  <div class="card"><h2>로그</h2><div class="log" id="logs"></div></div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const STATUS = { watching:['감시 중','ok'], reserved:['예약됨 · 결제 필요','warn'], done:['종료','' ], stopped:['중지','' ], expired:['기간 만료','' ] };
+let inited = false;
+
+async function api(path, method='GET', body) {
+  const r = await fetch(path, { method, headers: body ? {'Content-Type':'application/json'} : {}, body: body ? JSON.stringify(body) : undefined });
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail?.[0]?.msg || e.detail || r.statusText); }
+  return r.json();
+}
+
+function fillSelect(sel, items, current, labelFn = x => x) {
+  sel.innerHTML = items.map(v => `<option value="${esc(v)}">${esc(labelFn(v))}</option>`).join('');
+  if (current) sel.value = current;
+}
+
+function render(s) {
+  const k = s.kakao;
+  const kakaoPill = !k.configured ? ['카톡: .env에 KAKAO_REST_API_KEY 필요','err'] : k.connected ? ['카톡 연결됨','ok'] : ['카톡 미연결','warn'];
+  $('status').innerHTML =
+    `<span class="pill ${s.login.startsWith('로그인됨') ? 'ok' : ''}">코레일: ${esc(s.login)}</span>` +
+    `<span class="pill ${kakaoPill[1]}">${kakaoPill[0]}</span>` +
+    (k.configured && !k.connected ? `<a href="/kakao/login"><button class="ghost">카카오 연결하기</button></a>` : '') +
+    (s.paused_for ? `<span class="pill err">이용제한 대기 ${Math.ceil(s.paused_for/60)}분</span>` : '');
+
+  if (!inited && s.stations.length) {
+    fillSelect($('dep'), s.stations, '서울'); fillSelect($('arr'), s.stations, '부산');
+    fillSelect($('option'), Object.keys(s.options), 'GENERAL_FIRST', k => s.options[k]);
+    $('date').min = $('date').value = new Date(Date.now() - new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
+    $('interval').value = s.interval; $('minint').textContent = s.min_interval;
+    inited = true;
+  }
+
+  $('jobs').innerHTML = s.jobs.length ? s.jobs.map(j => {
+    const [label, cls] = STATUS[j.status] || [j.status, ''];
+    const r = j.result;
+    return `<div class="job"><div>
+      <b>${esc(j.dep)} → ${esc(j.arr)}</b> <span class="pill ${cls}">${label}</span>
+      <div class="meta">${esc(j.date)} ${esc(j.time_from)}~${esc(j.time_to)} · ${esc(s.options[j.option])} · ${j.train_type === 'KTX' ? 'KTX' : '전체'} · ${j.adults}명 · 조회 ${j.checks}회${j.last_checked ? ' (최근 ' + esc(j.last_checked) + ')' : ''}</div>
+      ${r ? `<div class="res">✅ ${esc(r.train)} · ${r.price.toLocaleString()}원 · 결제기한 ${esc(r.buy_limit)}</div>` : ''}
+    </div><div class="actions">
+      ${j.status === 'watching' ? `<button class="ghost" onclick="act('${j.id}','stop')">중지</button>` : ''}
+      ${['stopped','expired','done'].includes(j.status) ? `<button class="ghost" onclick="act('${j.id}','resume')">다시 감시</button>` : ''}
+      ${j.status === 'reserved' ? `<button class="danger" onclick="if(confirm('예약을 취소할까요?'))act('${j.id}','cancel')">예약 취소</button>` : ''}
+      <button class="danger" onclick="del('${j.id}')">삭제</button>
+    </div></div>`;
+  }).join('') : '<div class="empty">감시 중인 작업이 없습니다.</div>';
+
+  $('logs').innerHTML = s.logs.map(l => `<div class="${l.level}">${esc(l.t)}  ${esc(l.msg)}</div>`).join('') || '<div class="empty">아직 로그가 없습니다.</div>';
+}
+
+async function refresh() { try { render(await api('/api/state')); } catch (e) { console.error(e); } }
+async function act(id, a) { try { await api(`/api/jobs/${id}/${a}`, 'POST'); } catch (e) { alert(e.message); } refresh(); }
+async function del(id) { if (confirm('삭제할까요?')) { await api(`/api/jobs/${id}`, 'DELETE'); refresh(); } }
+
+$('form').onsubmit = async e => {
+  e.preventDefault();
+  try {
+    await api('/api/jobs', 'POST', {
+      dep: $('dep').value, arr: $('arr').value, date: $('date').value, time_from: $('time_from').value, time_to: $('time_to').value,
+      option: $('option').value, train_type: $('train_type').value, adults: +$('adults').value,
+    });
+    refresh();
+  } catch (err) { alert(err.message); }
+};
+$('saveInt').onclick = async () => { try { const r = await api('/api/settings', 'POST', { interval: +$('interval').value }); $('interval').value = r.interval; } catch (e) { alert(e.message); } };
+$('kakaoTest').onclick = async () => { try { await api('/api/kakao/test', 'POST'); alert('전송했습니다. 카톡을 확인하세요.'); } catch (e) { alert(e.message); } };
+
+refresh(); setInterval(refresh, 3000);
+</script>
+</body>
+</html>
