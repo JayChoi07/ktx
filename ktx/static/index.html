@@ -185,7 +185,7 @@
       <div>
         <section id="rsvSection" hidden><div class="section-head"><h2 class="t-title">결제 대기</h2><span class="t-small">기한 안에 코레일톡에서 결제하세요</span></div><div class="list" id="rsvList"></div></section>
         <section>
-          <div class="section-head"><h2 class="t-title">감시 목록 <span class="t-small num" id="count"></span></h2><button class="btn small" id="newBtn" type="button">＋ 새 감시</button><span class="t-small" style="flex-basis:100%">이 PC가 켜져 있고 콘솔 창이 열려 있는 동안만 감시해요</span></div>
+          <div class="section-head"><h2 class="t-title">감시 목록 <span class="t-small num" id="count"></span></h2><button class="btn small" id="newBtn" type="button">＋ 새 감시</button><span class="t-small" style="flex-basis:100%">이 PC가 켜져 있고 프로그램이 종료되지 않은 동안만 감시해요 (작업 표시줄 시계 옆 KTX 아이콘)</span></div>
           <div class="list" id="jobs"><div class="skeleton"></div><div class="skeleton"></div></div>
         </section>
       </div>
@@ -315,7 +315,7 @@ function makeCombo(box, id, initial, placeholder, onChange) {
 /* ---------------- 배너 / 상단 상태 ---------------- */
 function renderBanners() {
   const b = [];
-  if (failures >= 2) b.push(`<div class="banner err"><span><b>프로그램과 연결이 끊겼어요.</b> 검은 콘솔 창이 닫혔다면 ktx를 다시 실행하세요. 그동안 <b>감시는 멈춰 있어요.</b></span></div>`);
+  if (failures >= 2) b.push(`<div class="banner err"><span><b>프로그램과 연결이 끊겼어요.</b> 프로그램이 종료됐다면 ktx를 다시 실행하세요. 그동안 <b>감시는 멈춰 있어요.</b></span></div>`);
   else if (S) {
     const watching = S.jobs.some(j => j.status === 'watching');
     if (S.setup.korail && !S.setup.kakao_connected && wizardStep() === 0) b.push(`<div class="banner warn"><span><b>카톡이 연결되지 않았어요.</b> 지금은 예약이 되어도 알림이 가지 않아요.${watching ? ' 감시 중인 항목이 있어요!' : ''}</span><button class="btn small" id="bannerKakao">카톡 연결하기</button></div>`);
