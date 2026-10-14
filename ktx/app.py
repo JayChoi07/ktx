@@ -1,26 +1,29 @@
-"""웹 UI + API. 로컬(127.0.0.1)에서만 열어 사용한다."""
+"""웹 UI + API. 내 PC(127.0.0.1)에서만 열린다."""
 
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from fastapi import FastAPI, HTTPException  # noqa: E402
-from fastapi.responses import FileResponse, RedirectResponse  # noqa: E402
+from fastapi import FastAPI, HTTPException, Request  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse  # noqa: E402
 from pydantic import BaseModel, Field, field_validator  # noqa: E402
 
-from . import kakao  # noqa: E402
+from . import config, kakao  # noqa: E402
 from .monitor import MIN_INTERVAL, OPTIONS, TRAIN_TYPES, Monitor  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 monitor = Monitor()
-STATIC = Path(__file__).parent / "static"
+STATIC = (Path(getattr(sys, "_MEIPASS", "")) / "ktx" / "static") if getattr(sys, "frozen", False) else Path(__file__).parent / "static"
+LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 
 
 @asynccontextmanager
@@ -29,7 +32,18 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="KTX 자동예매", lifespan=lifespan)
+app = FastAPI(title="KTX 자동예매", lifespan=lifespan, docs_url=None, redoc_url=None)
+
+
+@app.middleware("http")
+async def local_only(request: Request, call_next):
+    """다른 웹사이트가 내 로컬 서버를 몰래 호출하지 못하게 막는다 (DNS rebinding / CSRF)."""
+    if (request.headers.get("host") or "").split(":")[0] not in LOCAL_HOSTS:
+        return JSONResponse({"detail": "허용되지 않은 호스트"}, status_code=403)
+    origin = request.headers.get("origin")
+    if request.method not in ("GET", "HEAD") and origin and urlparse(origin).hostname not in LOCAL_HOSTS:
+        return JSONResponse({"detail": "허용되지 않은 출처"}, status_code=403)
+    return await call_next(request)
 
 
 class JobIn(BaseModel):
@@ -59,17 +73,24 @@ class JobIn(BaseModel):
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/state")
 def state():
+    korail_set = bool(config.get("KORAIL_ID") and config.get("KORAIL_PW"))
     return {
         "login": monitor.login_state,
+        "account": monitor.account,
         "paused_for": max(0, int(monitor.paused_until - time.time())),
         "interval": monitor.settings["interval"],
         "min_interval": MIN_INTERVAL,
-        "kakao": {"configured": kakao.configured(), "connected": kakao.connected()},
+        "setup": {
+            "korail": korail_set,
+            "kakao_key": kakao.configured(),
+            "kakao_connected": kakao.connected(),
+            "redirect_uri": kakao.redirect_uri(),
+        },
         "stations": monitor.stations(),
         "options": OPTIONS,
         "jobs": monitor.jobs.all(),
@@ -77,12 +98,13 @@ def state():
     }
 
 
+# ---------- 감시 작업 ----------
 @app.post("/api/jobs")
 def add_job(job: JobIn):
     if job.dep == job.arr:
-        raise HTTPException(400, "출발역과 도착역이 같습니다")
+        raise HTTPException(400, "출발역과 도착역이 같아요")
     if job.time_from > job.time_to:
-        raise HTTPException(400, "시작 시각이 종료 시각보다 늦습니다")
+        raise HTTPException(400, "시작 시각이 종료 시각보다 늦어요")
     created = monitor.jobs.add(job.model_dump())
     monitor.say(f"감시 추가: {job.dep}→{job.arr} {job.date} {job.time_from}~{job.time_to}")
     monitor.wake()
@@ -97,7 +119,10 @@ def job_action(job_id: str, action: str):
         monitor.jobs.update(job_id, status="watching", result=None)
         monitor.wake()
     elif action == "cancel":  # 예약 취소(좌석 반납) 후 중지
-        monitor.cancel_reservation(job_id)
+        try:
+            monitor.cancel_reservation(job_id)
+        except Exception as e:
+            raise HTTPException(400, f"예약 취소 실패: {e}")
         monitor.jobs.update(job_id, status="stopped")
     else:
         raise HTTPException(404)
@@ -120,20 +145,69 @@ def settings(s: SettingsIn):
     return {"interval": monitor.settings["interval"]}
 
 
+# ---------- 첫 실행 설정 ----------
+class KorailIn(BaseModel):
+    user_id: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+@app.post("/api/setup/korail")
+def setup_korail(body: KorailIn):
+    try:
+        name = monitor.setup_korail(body.user_id.strip(), body.password)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"name": name}
+
+
+class KakaoKeyIn(BaseModel):
+    rest_api_key: str = Field(min_length=10)
+    client_secret: str = ""
+
+
+@app.post("/api/setup/kakao")
+def setup_kakao(body: KakaoKeyIn):
+    config.put("KAKAO_REST_API_KEY", body.rest_api_key.strip())
+    if body.client_secret.strip():
+        config.put("KAKAO_CLIENT_SECRET", body.client_secret.strip())
+    else:
+        config.remove("KAKAO_CLIENT_SECRET")
+    kakao.disconnect()  # 키가 바뀌면 이전 토큰은 무효
+    return {"ok": True}
+
+
+@app.post("/api/setup/reset/{what}")
+def setup_reset(what: str):
+    if what == "korail":
+        monitor.forget_korail()
+    elif what == "kakao":
+        config.remove("KAKAO_REST_API_KEY", "KAKAO_CLIENT_SECRET")
+        kakao.disconnect()
+    else:
+        raise HTTPException(404)
+    return {"ok": True}
+
+
+# ---------- 카카오 ----------
 @app.get("/kakao/login")
 def kakao_login():
     if not kakao.configured():
-        raise HTTPException(400, ".env 에 KAKAO_REST_API_KEY 를 먼저 설정하세요")
+        raise HTTPException(400, "카카오 REST API 키를 먼저 설정하세요")
     return RedirectResponse(kakao.login_url())
 
 
 @app.get("/kakao/callback")
-def kakao_callback(code: str | None = None, error: str | None = None):
+def kakao_callback(code: str | None = None, error: str | None = None, error_description: str | None = None):
     if error or not code:
-        raise HTTPException(400, f"카카오 인증 실패: {error}")
-    kakao.exchange_code(code)
+        monitor.say(f"카카오 인증 실패: {error_description or error}", "error")
+        return RedirectResponse(f"/?kakao_error={error_description or error or 'unknown'}")
+    try:
+        kakao.exchange_code(code)
+    except Exception as e:
+        monitor.say(str(e), "error")
+        return RedirectResponse(f"/?kakao_error={e}")
     monitor.say("카카오톡 연결 완료", "ok")
-    return RedirectResponse("/")
+    return RedirectResponse("/?kakao=ok")
 
 
 @app.post("/api/kakao/test")
@@ -141,5 +215,5 @@ def kakao_test():
     try:
         kakao.send("[KTX] 테스트 알림입니다. 이 메시지가 보이면 연결 성공!")
     except Exception as e:
-        raise HTTPException(400, f"전송 실패: {e}")
+        raise HTTPException(400, str(e))
     return {"ok": True}

@@ -3,17 +3,27 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import threading
 import uuid
 from pathlib import Path
 from typing import Any
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+def _data_dir() -> Path:
+    if override := os.environ.get("KTX_DATA_DIR"):
+        return Path(override)
+    if getattr(sys, "frozen", False):  # exe 로 배포된 경우: 사용자 폴더에 저장
+        return Path(os.environ.get("APPDATA", Path.home())) / "ktx-macro"
+    return Path(__file__).resolve().parent.parent / "data"
+
+
+DATA_DIR = _data_dir()
 _lock = threading.RLock()
 
 
 def _path(name: str) -> Path:
-    DATA_DIR.mkdir(exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     return DATA_DIR / name
 
 

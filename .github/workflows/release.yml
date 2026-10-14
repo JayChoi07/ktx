@@ -1,0 +1,22 @@
+name: release
+
+# 태그(v1.0.0 등)를 푸시하면 Windows exe 를 빌드해서 GitHub Releases 에 올린다.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run pyinstaller ktx.spec --noconfirm --log-level WARN
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ktx.exe
+          generate_release_notes: true

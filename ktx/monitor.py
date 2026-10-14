@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import os
 import random
 import threading
 import time
@@ -23,7 +22,7 @@ from pykorail.exceptions import (
     SoldOutError,
 )
 
-from . import kakao, store
+from . import config, kakao, store
 
 log = logging.getLogger("ktx")
 
@@ -40,6 +39,17 @@ def _hhmm(t: str) -> str:
 
 def _fmt_limit(d: str, t: str) -> str:
     return f"{d[4:6]}/{d[6:8]} {t[:2]}:{t[2:4]}"
+
+
+def friendly(e: Exception) -> str:
+    """코레일 예외를 사용자가 읽을 수 있는 안내문으로 바꾼다."""
+    if isinstance(e, AccessRestrictedError):
+        return "코레일이 접속을 제한했어요. VPN/프록시를 끄고, 잠시 뒤에 다시 시도하세요. (회사·집 일반 네트워크에서 실행해야 해요)"
+    if isinstance(e, LoginFailedError):
+        return f"코레일 로그인에 실패했어요. 아이디/비밀번호를 확인하세요. ({e})"
+    if isinstance(e, (ConnectionError, TimeoutError)):
+        return "인터넷 연결을 확인하세요."
+    return str(e)
 
 
 def _has_seat(train, option: str) -> bool:
@@ -103,9 +113,9 @@ class Monitor:
         return p
 
     def _login(self) -> bool:
-        uid, pw = os.environ.get("KORAIL_ID"), os.environ.get("KORAIL_PW")
+        uid, pw = config.get("KORAIL_ID"), config.get("KORAIL_PW")
         if not uid or not pw:
-            self.login_state = ".env 에 KORAIL_ID / KORAIL_PW 필요"
+            self.login_state = "코레일 계정 설정 필요"
             return False
         try:
             if self.korail:
@@ -119,8 +129,8 @@ class Monitor:
             return True
         except LoginFailedError as e:
             self.login_state = "로그인 실패"
-            self.say(f"코레일 로그인 실패: {e}", "error")
-            self.notify(f"[KTX] 코레일 로그인 실패: {e}")
+            self.say(friendly(e), "error")
+            self.notify(f"[KTX] {friendly(e)}")
             self.paused_until = time.time() + 3600  # 비밀번호 오류 반복 시 계정 잠김 방지
         except AccessRestrictedError as e:
             self._blocked(e)
@@ -131,8 +141,38 @@ class Monitor:
 
     def _blocked(self, e: Exception) -> None:
         self.paused_until = time.time() + BLOCK_PAUSE
-        self.say(f"코레일 이용제한 감지, {BLOCK_PAUSE // 60}분 대기: {e}", "error")
-        self.notify(f"[KTX] 코레일 이용제한 감지로 {BLOCK_PAUSE // 60}분 중단합니다. VPN/서버 IP인지 확인하세요.")
+        self.say(f"{friendly(e)} ({BLOCK_PAUSE // 60}분 쉬었다가 다시 시도합니다)", "error")
+        self.notify(f"[KTX] 코레일 접속 제한 감지 — {BLOCK_PAUSE // 60}분 쉽니다. VPN을 껐는지 확인하세요.")
+
+    @property
+    def account(self) -> str | None:
+        return self.korail.name if self.korail is not None and self.login_state.startswith("로그인됨") else None
+
+    def setup_korail(self, user_id: str, password: str) -> str:
+        """입력받은 계정으로 로그인해 보고, 성공하면 저장한다. 실패 시 안내문과 함께 예외."""
+        client = Korail(device_profile=self._profile())
+        try:
+            client.login(user_id, password)
+        except Exception as e:
+            raise ValueError(friendly(e)) from e
+        config.put("KORAIL_ID", user_id)
+        config.put("KORAIL_PW", password)
+        if self.korail:
+            self.korail.close()
+        self.korail = client
+        self.paused_until = 0.0
+        self.login_state = f"로그인됨 ({client.name})"
+        self._stations = sorted(s.name for s in client.stations.all())
+        self.say(f"코레일 계정 설정 완료 ({client.name})", "ok")
+        self.wake()
+        return client.name
+
+    def forget_korail(self) -> None:
+        config.remove("KORAIL_ID", "KORAIL_PW")
+        if self.korail:
+            self.korail.close()
+        self.korail = None
+        self.login_state = "코레일 계정 설정 필요"
 
     # ---------- 메인 루프 ----------
     def _run(self) -> None:
@@ -193,7 +233,7 @@ class Monitor:
             return
         now = datetime.now().strftime("%m/%d %H:%M:%S")
         for job in jobs:
-            self.jobs.update(job["id"], checks=job["checks"] + 1, last_checked=now)
+            self.jobs.update(job["id"], checks=job["checks"] + 1, last_checked=now, last_checked_ts=time.time())
             self._try_reserve(job, trains)
 
     def _try_reserve(self, job: dict, trains: list) -> None:
@@ -227,6 +267,7 @@ class Monitor:
                 "train": f"{t.train_type_name} {t.train_no} {t.dep_name}→{t.arr_name} {_hhmm(t.dep_time)}~{_hhmm(t.arr_time)}",
                 "price": rsv.price,
                 "buy_limit": _fmt_limit(rsv.buy_limit_date, rsv.buy_limit_time),
+                "buy_limit_iso": datetime.strptime(rsv.buy_limit_date + rsv.buy_limit_time[:4], "%Y%m%d%H%M").isoformat(),
                 "seats": [str(s) for s in rsv.seats],
             }
             self.jobs.update(job["id"], status="reserved", result=result)
