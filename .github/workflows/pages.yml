@@ -1,15 +1,16 @@
 name: pages
 
-# docs/ 폴더(설치 안내 페이지)를 GitHub Pages 로 배포한다.
+# docs/ (설치 안내 페이지)를 gh-pages 브랜치로 밀어 GitHub Pages 로 배포한다.
+# actions/configure-pages 의 자동 활성화는 GITHUB_TOKEN 권한 문제로 실패해서, 브랜치 배포 방식으로 바꿨다.
+# 공개 저장소는 gh-pages 브랜치가 생기면 Pages 가 자동으로 켜지는 것이 보통이고,
+# 안 켜지면 Settings → Pages → Source: Deploy from a branch (gh-pages) 를 한 번 고르면 된다.
 on:
   push:
-    branches: [main]  # 경로 필터 없음: 새 브랜치의 첫 푸시에서는 paths 필터가 동작하지 않아 배포가 안 된다
+    branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
@@ -18,16 +19,10 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
+      - uses: peaceiris/actions-gh-pages@v4
         with:
-          enablement: true  # 저장소 설정에서 Pages 를 따로 켜지 않아도 되게
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
-      - id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs
+          force_orphan: true
