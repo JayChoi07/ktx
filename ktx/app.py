@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field, field_validator
 
 from . import config, kakao
-from .monitor import MIN_INTERVAL, OPTIONS, TRAIN_TYPES, Monitor
+from .monitor import MAX_INTERVAL, MIN_INTERVAL, OPTIONS, TRAIN_TYPES, Monitor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 monitor = Monitor()
@@ -83,6 +83,7 @@ def state():
         "paused_for": max(0, int(monitor.paused_until - time.time())),
         "interval": monitor.settings["interval"],
         "min_interval": MIN_INTERVAL,
+        "max_interval": MAX_INTERVAL,
         "setup": {
             "korail": korail_set,
             "kakao_key": kakao.configured(),
@@ -139,7 +140,10 @@ class SettingsIn(BaseModel):
 
 @app.post("/api/settings")
 def settings(s: SettingsIn):
-    monitor.set_interval(s.interval)
+    try:
+        monitor.set_interval(s.interval)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
     return {"interval": monitor.settings["interval"]}
 
 

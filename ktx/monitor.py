@@ -27,7 +27,9 @@ from . import config, kakao, store
 
 log = logging.getLogger("ktx")
 
-MIN_INTERVAL = 5.0  # 이보다 빠르게 조회하면 계정 정지 위험
+MIN_INTERVAL = 10.0  # 이보다 빠르게 조회하면 계정 정지 위험
+MAX_INTERVAL = 3600.0
+DEFAULT_INTERVAL = 30.0
 BLOCK_PAUSE = 600  # 이용제한 감지 시 쉬는 시간(초)
 REMIND_EVERY = 120  # 결제 재알림 간격(초)
 # *_FIRST 는 선호하는 쪽이 없으면 다른 쪽 좌석이라도 잡는다 ("전부"). *_ONLY 는 그 등급만.
@@ -89,7 +91,9 @@ class Monitor:
         self.jobs = store.Jobs()
         self.korail: Korail | None = None
         self.logs: deque[dict] = deque(maxlen=200)
-        self.settings = {"interval": 8.0, **store.load("settings.json", {})}
+        self.settings = {"interval": DEFAULT_INTERVAL, **store.load("settings.json", {})}
+        # 예전 버전에서 저장한 값이 새 최소치보다 작으면 올린다
+        self.settings["interval"] = min(MAX_INTERVAL, max(MIN_INTERVAL, float(self.settings["interval"])))
         self.paused_until = 0.0
         self.login_state = "로그인 전"
         self._stop = threading.Event()
@@ -118,7 +122,12 @@ class Monitor:
         self._wake.set()
 
     def set_interval(self, sec: float) -> None:
-        self.settings["interval"] = max(MIN_INTERVAL, float(sec))
+        sec = float(sec)
+        if not sec >= MIN_INTERVAL:  # NaN 도 걸러낸다
+            raise ValueError(f"조회 간격은 최소 {MIN_INTERVAL:g}초예요")
+        if sec > MAX_INTERVAL:
+            raise ValueError(f"조회 간격은 최대 {MAX_INTERVAL / 60:g}분이에요")
+        self.settings["interval"] = sec
         store.save("settings.json", self.settings)
 
     def stations(self) -> list[str]:

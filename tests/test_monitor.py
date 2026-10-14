@@ -266,3 +266,15 @@ def test_jobs_store_roundtrip(tmp_path, monkeypatch):
     assert jobs.update("nope", status="x") is None
     jobs.remove(j["id"])
     assert jobs.all() == []
+
+
+def test_interval_limits(mon):
+    mon.set_interval(45)
+    assert mon.settings["interval"] == 45
+    for bad in (0, 9.9, -1, float("nan"), 3601):
+        with pytest.raises(ValueError):
+            mon.set_interval(bad)
+    assert mon.settings["interval"] == 45
+    # 예전 버전이 저장한 8초는 로드할 때 최소치로 올라간다
+    store.save("settings.json", {"interval": 8})
+    assert m.Monitor().settings["interval"] == m.MIN_INTERVAL == 10

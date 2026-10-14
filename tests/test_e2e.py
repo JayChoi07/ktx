@@ -148,6 +148,16 @@ def test_04_bad_setup_code_then_skip(page):
     shot(page, "04-main-empty")
 
 
+def test_04b_banner_does_not_blink_on_poll(page):
+    """배너는 폴링(3초)마다 다시 그리지 않아야 한다 — 다시 그리면 등장 애니메이션이 반복돼 깜빡이고 스크롤 중 사라져 보인다."""
+    banner = page.locator("#banners .banner.warn")
+    expect(banner).to_be_visible()
+    page.evaluate("document.querySelector('#banners .banner.warn').dataset.mark = 'same'")
+    page.wait_for_timeout(7000)  # 폴링 2회 이상
+    assert page.evaluate("document.querySelector('#banners .banner.warn').dataset.mark") == "same"
+    assert page.evaluate("getComputedStyle(document.querySelector('#banners .banner.warn')).opacity") == "1"
+
+
 # ---------------------------------------------------------------- 2. 새 감시 폼
 def test_05_station_combobox(page):
     page.click("#dep")
@@ -241,10 +251,24 @@ def test_09_settings_sheet(page):
     expect(sheet.locator("#sTest")).to_be_disabled()
     expect(sheet).to_contain_text("코레일 계정")
     expect(sheet).to_contain_text("님")
-    sheet.locator("#sInt .chip:has-text('느긋하게 15초')").click()
-    expect(toast(page, "ok")).to_contain_text("15초")
-    expect(sheet.locator("#sInt .chip[aria-pressed=true]")).to_contain_text("15초")
-    assert state()["interval"] == 15
+    sheet.locator("#sInt .chip:has-text('1분')").click()
+    expect(toast(page, "ok")).to_contain_text("1분")
+    expect(sheet.locator("#sInt .chip[aria-pressed=true]")).to_contain_text("1분")
+    expect(sheet.locator("#sIntForm")).to_be_hidden()
+    assert state()["interval"] == 60
+    # 직접 입력: 10초 미만은 거부, 45초는 적용
+    sheet.locator("#sCustom").click()
+    expect(sheet.locator("#sIntForm")).to_be_visible()
+    sheet.locator("#sIntVal").fill("5")
+    sheet.locator("#sIntForm button").click()
+    expect(toast(page, "err")).to_contain_text("최소 10초")
+    assert state()["interval"] == 60
+    sheet.locator("#sIntVal").fill("45")
+    sheet.locator("#sIntForm button").click()
+    expect(toast(page, "ok")).to_contain_text("45초")
+    expect(sheet.locator("#sInt .chip[aria-pressed=true]")).to_contain_text("직접 입력")
+    expect(sheet).to_contain_text("현재 45초")
+    assert state()["interval"] == 45
     sheet.locator("details.logbox summary").click()
     expect(sheet.locator("#logs")).to_contain_text("코레일")
     shot(page, "09-settings")

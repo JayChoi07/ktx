@@ -313,6 +313,7 @@ function makeCombo(box, id, initial, placeholder, onChange) {
 }
 
 /* ---------------- 배너 / 상단 상태 ---------------- */
+let bannersShown = null;
 function renderBanners() {
   const b = [];
   if (failures >= 2) b.push(`<div class="banner err"><span><b>프로그램과 연결이 끊겼어요.</b> 프로그램이 종료됐다면 ktx를 다시 실행하세요. 그동안 <b>감시는 멈춰 있어요.</b></span></div>`);
@@ -321,8 +322,11 @@ function renderBanners() {
     if (S.setup.korail && !S.setup.kakao_connected && wizardStep() === 0) b.push(`<div class="banner warn"><span><b>카톡이 연결되지 않았어요.</b> 지금은 예약이 되어도 알림이 가지 않아요.${watching ? ' 감시 중인 항목이 있어요!' : ''}</span><button class="btn small" id="bannerKakao">카톡 연결하기</button></div>`);
     if (S.paused_for) b.push(`<div class="banner err"><span><b>코레일이 접속을 제한했어요.</b> ${Math.ceil(S.paused_for/60)}분 뒤에 자동으로 다시 시도해요. VPN이 켜져 있다면 꺼 주세요.</span></div>`);
   }
-  $('banners').innerHTML = b.join('');
-  const bk = $('bannerKakao'); if (bk) bk.onclick = () => { store.set('skipKakao', ''); wizardShown = -1; renderWizard(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const html = b.join('');
+  if (html === bannersShown) return;  // 매 폴링마다 다시 그리면 등장 애니메이션이 반복돼 깜빡인다
+  bannersShown = html;
+  $('banners').innerHTML = html;
+  const bk = $('bannerKakao'); if (bk) bk.onclick = () => { store.set('skipKakao', ''); wizardShown = -1; renderWizard(); renderBanners(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 }
 function renderStatus() {
   const k = S.setup, ok = !!S.account;
@@ -529,7 +533,9 @@ async function poll() {
 }
 /* ---------------- 설정 시트 ---------------- */
 const logHtml = () => S.logs.map(l => `<div class="${l.level}">${esc(l.t)}  ${esc(l.msg)}</div>`).join('') || '<span class="t-small">아직 로그가 없어요.</span>';
-const INTERVALS = [[5,'빠르게 5초'],[8,'보통 8초'],[15,'느긋하게 15초'],[30,'안전하게 30초']];
+const INTERVALS = [[30,'30초'],[60,'1분'],[300,'5분'],[600,'10분']];
+const fmtSec = s => s < 60 ? `${s}초` : s % 60 ? `${Math.floor(s/60)}분 ${s%60}초` : `${s/60}분`;
+const isPreset = v => INTERVALS.some(([p]) => p === v);
 function renderSettings() {
   const k = S.setup, ok = !!S.account;
   $('setBody').innerHTML = `
@@ -543,8 +549,9 @@ function renderSettings() {
       <div class="line"><span>${ok ? `<span class="badge ok"><span class="dot"></span>${esc(S.account)}님</span>` : esc(S.login)}</span>
         ${k.korail ? '<button class="btn danger small" id="sResetKorail">계정 지우기</button>' : '<button class="btn small" id="sLinkKorail">계정 연결하기</button>'}</div></div>
     <div class="set"><h3>조회 간격</h3><p class="t-small">짧을수록 빨리 잡지만, 너무 짧으면 코레일이 매크로로 보고 계정/IP를 제한할 수 있어요.</p>
-      <div class="chips" id="sInt">${INTERVALS.map(([v, l]) => `<button type="button" class="chip" data-v="${v}" aria-pressed="${S.interval === v}">${l}</button>`).join('')}</div>
-      <p class="t-small" style="margin:10px 0 0">현재 ${S.interval}초 · 최소 ${S.min_interval}초</p></div>
+      <div class="chips" id="sInt">${INTERVALS.map(([v, l]) => `<button type="button" class="chip" data-v="${v}" aria-pressed="${S.interval === v}">${l}</button>`).join('')}<button type="button" class="chip" id="sCustom" aria-pressed="${!isPreset(S.interval)}">직접 입력</button></div>
+      <form class="row" id="sIntForm" novalidate style="margin-top:10px;align-items:center" ${isPreset(S.interval) ? 'hidden' : ''}><input class="input" id="sIntVal" type="number" inputmode="numeric" min="${S.min_interval}" max="${S.max_interval}" step="1" value="${S.interval}" style="width:120px" aria-label="조회 간격(초)"><span class="t-small">초 (최소 ${S.min_interval}초)</span><button class="btn small">적용</button></form>
+      <p class="t-small" style="margin:10px 0 0">현재 ${fmtSec(S.interval)}마다 조회</p></div>
     <div class="set"><details class="logbox"><summary>활동 로그</summary><div class="log" id="logs">${logHtml()}</div></details></div>`;
   const on = (id, fn) => $(id) && ($(id).onclick = fn);
   on('sTest', async () => { try { await api('/api/kakao/test', 'POST'); toast('보냈어요. 카톡을 확인하세요', 'ok'); } catch (e) { toast(e.message, 'err'); } });
@@ -552,7 +559,10 @@ function renderSettings() {
   on('sResetKakao', async () => { if (await ask('카카오 설정과 연결을 지울까요?', '지우기', true)) { await api('/api/setup/reset/kakao', 'POST'); store.set('skipKakao', ''); wizardShown = -1; await poll(); renderSettings(); } });
   on('sLinkKorail', () => { $('settings').close(); wizardShown = -1; poll().then(() => $('wizard').scrollIntoView({ behavior: 'smooth', block: 'start' })); });
   on('sResetKorail', async () => { if (await ask('저장된 코레일 계정을 지울까요? 감시는 멈춰요.', '지우기', true)) { await api('/api/setup/reset/korail', 'POST'); $('settings').close(); wizardShown = -1; formReady = false; poll(); } });
-  $('sInt').onclick = async e => { const b = e.target.closest('[data-v]'); if (!b) return; try { await api('/api/settings', 'POST', { interval: +b.dataset.v }); toast(`조회 간격을 ${b.dataset.v}초로 바꿨어요`, 'ok'); await poll(); renderSettings(); } catch (err) { toast(err.message, 'err'); } };
+  const applyInterval = async sec => { try { await api('/api/settings', 'POST', { interval: sec }); toast(`조회 간격을 ${fmtSec(sec)}로 바꿨어요`, 'ok'); await poll(); renderSettings(); } catch (err) { toast(err.message, 'err'); } };
+  $('sInt').onclick = e => { const b = e.target.closest('[data-v]'); if (b) applyInterval(+b.dataset.v); };
+  $('sCustom').onclick = () => { $('sInt').querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', c.id === 'sCustom')); $('sIntForm').hidden = false; $('sIntVal').focus(); $('sIntVal').select(); };
+  $('sIntForm').onsubmit = e => { e.preventDefault(); const v = Math.round(+$('sIntVal').value); if (!(v >= S.min_interval)) { toast(`조회 간격은 최소 ${S.min_interval}초예요`, 'err'); return; } if (v > S.max_interval) { toast(`조회 간격은 최대 ${S.max_interval / 60}분이에요`, 'err'); return; } applyInterval(v); };
 }
 function openSettings() { if (!S) return; renderSettings(); $('settings').showModal(); }
 $('gear').onclick = openSettings; $('status').onclick = openSettings; $('closeSet').onclick = () => $('settings').close();
