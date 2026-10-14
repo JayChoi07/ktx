@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import sys
 import time
@@ -161,15 +163,37 @@ def setup_korail(body: KorailIn):
 
 
 class KakaoKeyIn(BaseModel):
-    rest_api_key: str = Field(min_length=10)
+    rest_api_key: str = ""
     client_secret: str = ""
+    code: str = ""  # 앱 만든 사람이 건네준 '설정 코드' (키+시크릿을 하나로 묶은 것)
+
+
+def _decode_code(code: str) -> tuple[str, str]:
+    try:
+        raw = json.loads(base64.urlsafe_b64decode(code.strip() + "=" * (-len(code.strip()) % 4)))
+        return str(raw["k"]), str(raw.get("s", ""))
+    except Exception:
+        raise HTTPException(400, "설정 코드가 올바르지 않아요. 전달받은 코드를 그대로 붙여 넣어 주세요.")
+
+
+@app.get("/api/setup/kakao/code")
+def kakao_code():
+    """다른 사람에게 줄 설정 코드. 내 PC(localhost)에서만 호출 가능."""
+    key = config.get("KAKAO_REST_API_KEY")
+    if not key:
+        raise HTTPException(404, "카카오 키가 설정되어 있지 않아요")
+    raw = json.dumps({"k": key, "s": config.get("KAKAO_CLIENT_SECRET") or ""}).encode()
+    return {"code": base64.urlsafe_b64encode(raw).decode().rstrip("=")}
 
 
 @app.post("/api/setup/kakao")
 def setup_kakao(body: KakaoKeyIn):
-    config.put("KAKAO_REST_API_KEY", body.rest_api_key.strip())
-    if body.client_secret.strip():
-        config.put("KAKAO_CLIENT_SECRET", body.client_secret.strip())
+    key, secret = (_decode_code(body.code) if body.code.strip() else (body.rest_api_key.strip(), body.client_secret.strip()))
+    if len(key) < 10:
+        raise HTTPException(400, "카카오 REST API 키를 입력해 주세요")
+    config.put("KAKAO_REST_API_KEY", key)
+    if secret:
+        config.put("KAKAO_CLIENT_SECRET", secret)
     else:
         config.remove("KAKAO_CLIENT_SECRET")
     kakao.disconnect()  # 키가 바뀌면 이전 토큰은 무효

@@ -8,42 +8,39 @@
 <style>
   /* ---------- 토큰 (라이트 전용) ---------- */
   :root {
-    --bg: #f4f5f7; --card: #ffffff; --text: #191f28; --sub: #4e5968; --mute: #6b7684; --line: #e5e8eb; --soft: #f2f4f6;
+    --bg: #f4f5f7; --card: #ffffff; --text: #191f28; --sub: #4e5968; --mute: #667080; --line: #e5e8eb; --soft: #f2f4f6;
     --pri: #2272eb; --pri-hover: #1b64da; --pri-bg: #e8f3ff;
-    --ok: #038a55; --ok-bg: #e6f7ef; --warn: #b26a00; --warn-bg: #fff4e0; --err: #d6293a; --err-bg: #fdecee;
+    --ok: #038a55; --ok-bg: #e6f7ef; --warn: #8a5300; --warn-bg: #fff4e0; --err: #d6293a; --err-bg: #fdecee;
     --radius: 16px; --shadow: 0 1px 2px rgba(25,31,40,.04), 0 4px 16px rgba(25,31,40,.05);
     --ease: cubic-bezier(.2,.8,.2,1);
   }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
   body { margin:0; background:var(--bg); color:var(--text); font:15px/1.55 "Pretendard Variable", Pretendard, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; -webkit-font-smoothing:antialiased; }
-  main { max-width: 960px; margin: 0 auto; padding: 20px 16px 80px; }
+  main { max-width: 1040px; margin: 0 auto; padding: 20px 16px 80px; }
   h1,h2,h3,p { margin:0; }
   button, input, select { font: inherit; color: inherit; }
   :focus-visible { outline: 3px solid rgba(34,114,235,.45); outline-offset: 2px; border-radius: 8px; }
 
-  /* ---------- 타이포 5단계 ---------- */
-  .t-hero { font-size: 28px; font-weight: 800; letter-spacing: -.02em; line-height: 1.25; }
   .t-title { font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
-  .t-body { font-size: 15px; }
   .t-small { font-size: 13px; color: var(--mute); }
   .num { font-variant-numeric: tabular-nums; }
 
-  /* ---------- 공통 컴포넌트 ---------- */
+  /* ---------- 공통 ---------- */
   .card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px; }
-  .btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:44px; padding:0 18px; border:0; border-radius:12px; background:var(--pri); color:#fff; font-weight:600; cursor:pointer; transition: background .15s, transform .08s; }
+  .btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:48px; padding:0 20px; border:0; border-radius:12px; background:var(--pri); color:#fff; font-weight:600; cursor:pointer; transition: background .15s, transform .08s; }
   .btn:hover { background: var(--pri-hover); } .btn:active { transform: scale(.98); }
   .btn:disabled { opacity:.55; cursor:not-allowed; }
   .btn.sub { background: var(--soft); color: var(--text); } .btn.sub:hover { background:#e8ebee; }
   .btn.danger { background: var(--err-bg); color: var(--err); } .btn.danger:hover { background:#fbdadd; }
-  .btn.small { min-height:34px; padding:0 12px; font-size:13px; border-radius:10px; }
+  .btn.small { min-height:40px; padding:0 14px; font-size:14px; border-radius:10px; }
   .btn.block { width:100%; }
   .field { display:flex; flex-direction:column; gap:6px; min-width:0; }
-  .field > span { font-size:13px; font-weight:600; color:var(--sub); }
+  .field > span, .lbl { font-size:13px; font-weight:600; color:var(--sub); }
   .input { width:100%; min-height:48px; padding:0 14px; background:var(--soft); border:2px solid transparent; border-radius:12px; transition: border-color .15s, background .15s; }
   .input:hover { background:#eceef1; } .input:focus { outline:0; border-color: var(--pri); background:#fff; }
   .chips { display:flex; flex-wrap:wrap; gap:8px; }
-  .chip { min-height:34px; padding:0 14px; border-radius:99px; border:1.5px solid var(--line); background:#fff; color:var(--sub); font-size:13px; font-weight:600; cursor:pointer; transition: all .15s; }
+  .chip { min-height:40px; padding:0 16px; border-radius:99px; border:1.5px solid var(--line); background:#fff; color:var(--sub); font-size:14px; font-weight:600; cursor:pointer; transition: all .15s; }
   .chip:hover { border-color:#c9ced6; } .chip[aria-pressed="true"] { background:var(--pri-bg); border-color:var(--pri); color:var(--pri-hover); }
   .badge { display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:99px; font-size:12px; font-weight:700; background:var(--soft); color:var(--sub); }
   .badge.ok { background:var(--ok-bg); color:var(--ok); } .badge.warn { background:var(--warn-bg); color:var(--warn); } .badge.err { background:var(--err-bg); color:var(--err); } .badge.pri { background:var(--pri-bg); color:var(--pri-hover); }
@@ -51,50 +48,64 @@
   .pulse { animation: pulse 1.8s ease-out infinite; }
   @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 45%, transparent); } 70%,100% { box-shadow: 0 0 0 8px transparent; } }
 
-  /* ---------- 헤더 ---------- */
-  header { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:20px; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
   .logo { display:flex; align-items:center; gap:10px; font-weight:800; font-size:18px; letter-spacing:-.01em; }
   .logo i { width:34px; height:34px; border-radius:10px; background:var(--pri); display:grid; place-items:center; color:#fff; font-style:normal; font-size:18px; }
   .status { display:flex; gap:8px; flex-wrap:wrap; }
 
-  /* ---------- 레이아웃 ---------- */
-  .grid { display:grid; grid-template-columns: minmax(0,1.6fr) minmax(0,1fr); gap:16px; align-items:start; }
+  /* ---------- 배너 ---------- */
+  #banners { display:flex; flex-direction:column; gap:10px; margin-bottom:16px; }
+  .banner { display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; padding:14px 18px; border-radius:14px; font-weight:500; animation: rise .35s var(--ease) both; }
+  .banner.err { background:var(--err-bg); color:#9b1c28; } .banner.warn { background:var(--warn-bg); color:var(--warn); }
+  .banner b { font-weight:800; }
+
+  /* ---------- 레이아웃: 목록(왼쪽) + 폼(오른쪽, 고정) ---------- */
+  .grid { display:grid; grid-template-columns: minmax(0,1.5fr) minmax(0,1fr); gap:20px; align-items:start; }
   .card, .job, details { min-width:0; }
-  .stack { display:flex; flex-direction:column; gap:16px; }
+  .formcol { position: sticky; top: 16px; }
   section + section { margin-top: 28px; }
-  .section-head { display:flex; align-items:baseline; justify-content:space-between; margin: 0 4px 12px; }
-  @media (max-width: 760px) { .grid { grid-template-columns: minmax(0,1fr); } .t-hero { font-size:24px; } .card { padding:20px; } }
+  .section-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; margin: 0 4px 12px; }
+  @media (min-width: 761px) { .formcol summary { pointer-events:none; } .formcol summary::after { display:none; } }
+  @media (max-width: 760px) { .grid { grid-template-columns: minmax(0,1fr); } .formcol { position:static; } .grid.nojobs .formcol { order:-1; } .card { padding:20px; } }
 
   /* ---------- 새 감시 폼 ---------- */
+  .formcard { padding:0 24px; }
+  .formcard > summary { padding:22px 0; font-size:20px; font-weight:700; }
+  .form { display:flex; flex-direction:column; gap:20px; padding-bottom:24px; }
   .route { display:grid; grid-template-columns: minmax(0,1fr) 44px minmax(0,1fr); gap:8px; align-items:end; }
   .swap { width:44px; height:44px; border-radius:50%; border:1.5px solid var(--line); background:#fff; cursor:pointer; display:grid; place-items:center; transition: transform .4s var(--ease), background .15s; margin-bottom:2px; }
   .swap:hover { background: var(--pri-bg); } .swap.spin { transform: rotate(180deg); }
   .swap svg { width:20px; height:20px; stroke: var(--sub); }
-  .form { display:flex; flex-direction:column; gap:20px; }
   .two { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; }
   .stepper { display:inline-flex; align-items:center; gap:4px; background:var(--soft); border-radius:12px; padding:4px; }
-  .stepper button { width:40px; height:40px; border:0; border-radius:9px; background:#fff; font-size:18px; cursor:pointer; }
+  .stepper button { width:44px; height:44px; border:0; border-radius:9px; background:#fff; font-size:18px; cursor:pointer; }
   .stepper output { min-width:36px; text-align:center; font-weight:700; }
+  .hint { font-size:13px; color:var(--sub); background:var(--soft); border-radius:10px; padding:10px 12px; }
 
-  /* ---------- 요약 ---------- */
-  .summary { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-  .stat { background:var(--soft); border-radius:12px; padding:14px 16px; }
-  .stat b { display:block; font-size:30px; font-weight:800; letter-spacing:-.02em; line-height:1.1; }
-  .stat span { font-size:13px; color:var(--mute); }
-  .tip { margin-top:16px; font-size:13px; color:var(--sub); background:var(--pri-bg); border-radius:12px; padding:12px 14px; }
+  /* ---------- 역 콤보박스 ---------- */
+  .combo { position:relative; }
+  .opts { position:absolute; z-index:30; left:0; right:0; top:calc(100% + 6px); max-height:280px; overflow:auto; margin:0; padding:6px; list-style:none; background:#fff; border-radius:14px; box-shadow:0 8px 28px rgba(25,31,40,.16); border:1px solid var(--line); min-width:180px; }
+  .opts li { padding:10px 12px; border-radius:9px; cursor:pointer; display:flex; justify-content:space-between; gap:8px; }
+  .opts li[aria-selected="true"], .opts li:hover { background:var(--pri-bg); }
+  .opts .sep { cursor:default; font-size:12px; font-weight:700; color:var(--mute); padding:8px 12px 4px; } .opts .sep:hover { background:none; }
+  .opts .none { color:var(--mute); cursor:default; } .opts .none:hover { background:none; }
 
-  /* ---------- 감시/예약 카드 ---------- */
+  /* ---------- 카드 ---------- */
   .list { display:flex; flex-direction:column; gap:12px; }
   .job { background:var(--card); border-radius:var(--radius); box-shadow:var(--shadow); padding:20px 24px; display:flex; gap:16px; justify-content:space-between; flex-wrap:wrap; transition: transform .2s var(--ease), box-shadow .2s; }
   .job:hover { transform: translateY(-2px); box-shadow: 0 2px 4px rgba(25,31,40,.05), 0 10px 24px rgba(25,31,40,.08); }
+  .job > div:first-child { flex:1 1 280px; min-width:0; }
   .job.enter { animation: rise .5s var(--ease) both; animation-delay: calc(var(--i, 0) * 60ms); }
   @keyframes rise { from { opacity:0; transform: translateY(10px); } to { opacity:1; transform:none; } }
-  .job .route-line { font-size:20px; font-weight:800; letter-spacing:-.01em; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .route-line { font-size:20px; font-weight:800; letter-spacing:-.01em; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
   .job .meta { margin-top:6px; color:var(--sub); }
   .job .metrics { margin-top:10px; display:flex; gap:16px; flex-wrap:wrap; }
+  .trains { margin-top:12px; display:flex; flex-wrap:wrap; gap:6px; }
+  .tr { font-size:12px; font-weight:600; padding:4px 9px; border-radius:8px; background:var(--soft); color:var(--mute); }
+  .tr.have { background:var(--ok-bg); color:var(--ok); }
   .actions { display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap; }
   .job.reserved { background: linear-gradient(180deg, #fffaf0, #fff); border: 2px solid #ffd58a; }
-  .job.reserved .big { font-size:15px; font-weight:700; margin-top:10px; }
+  .job.reserved .big { font-size:16px; font-weight:700; margin-top:10px; }
   .countdown { display:flex; align-items:center; gap:14px; }
   .ring { width:84px; height:84px; position:relative; flex:none; }
   .ring svg { transform: rotate(-90deg); width:84px; height:84px; }
@@ -104,7 +115,6 @@
   .check { width:22px; height:22px; stroke: var(--ok); fill:none; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:30; stroke-dashoffset:30; animation: draw .6s .15s var(--ease) forwards; }
   @keyframes draw { to { stroke-dashoffset: 0; } }
 
-  /* ---------- 빈 화면 / 스켈레톤 ---------- */
   .empty { text-align:center; padding:40px 16px; color:var(--mute); background:var(--card); border-radius:var(--radius); box-shadow:var(--shadow); }
   .empty .ico { font-size:40px; margin-bottom:8px; }
   .skeleton { height:96px; border-radius:var(--radius); background: linear-gradient(90deg,#eceef1 25%,#f6f7f9 37%,#eceef1 63%); background-size:400% 100%; animation: shimmer 1.4s ease infinite; }
@@ -115,26 +125,30 @@
   .steps { display:flex; gap:8px; margin: 12px 0 20px; }
   .steps div { flex:1; height:6px; border-radius:99px; background:var(--soft); overflow:hidden; position:relative; }
   .steps div::after { content:""; position:absolute; inset:0; background:var(--pri); transform: scaleX(0); transform-origin:left; transition: transform .5s var(--ease); }
-  .steps div.done::after { transform: scaleX(1); }
-  .steps div.now::after { transform: scaleX(.5); }
+  .steps div.done::after { transform: scaleX(1); } .steps div.now::after { transform: scaleX(.5); }
   .wizard .t-small { margin-top:6px; }
   .wiz-body { margin-top:18px; display:flex; flex-direction:column; gap:14px; max-width:460px; animation: rise .4s var(--ease) both; }
   .copy { display:flex; gap:8px; align-items:center; background:var(--soft); border-radius:10px; padding:8px 12px; font:12px ui-monospace, Consolas, monospace; word-break:break-all; }
 
   /* ---------- 접이식 / 로그 ---------- */
-  details { background:var(--card); border-radius:var(--radius); box-shadow:var(--shadow); padding:0 24px; }
-  details + details { margin-top:12px; }
+  details.box { background:var(--card); border-radius:var(--radius); box-shadow:var(--shadow); padding:0 24px; }
+  details.box + details.box { margin-top:12px; }
   summary { padding:18px 0; cursor:pointer; font-weight:700; list-style:none; display:flex; justify-content:space-between; }
-  summary::after { content:"＋"; color:var(--mute); } details[open] summary::after { content:"－"; }
+  summary::-webkit-details-marker { display:none; }
+  summary::after { content:"＋"; color:var(--mute); } details[open] > summary::after { content:"－"; }
   details .inner { padding: 0 0 20px; display:flex; flex-direction:column; gap:14px; }
   .log { font:12px/1.7 ui-monospace, Consolas, monospace; max-height:260px; overflow:auto; background:var(--soft); border-radius:10px; padding:10px 12px; }
   .log .warn { color: var(--warn); } .log .error { color: var(--err); font-weight:600; } .log .ok { color: var(--ok); }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:end; }
 
-  /* ---------- 토스트 ---------- */
+  /* ---------- 토스트 / 확인창 ---------- */
   #toasts { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); display:flex; flex-direction:column; gap:8px; z-index:50; width:min(420px, calc(100vw - 32px)); }
   .toast { background:#191f28; color:#fff; padding:14px 18px; border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.2); animation: rise .3s var(--ease) both; font-weight:500; }
   .toast.err { background:var(--err); } .toast.ok { background:var(--ok); }
+  dialog { border:0; border-radius:20px; padding:26px; width:min(380px, calc(100vw - 32px)); box-shadow:0 20px 60px rgba(0,0,0,.25); color:var(--text); }
+  dialog::backdrop { background:rgba(25,31,40,.45); }
+  dialog[open] { animation: rise .25s var(--ease); }
+  dialog p { font-size:17px; font-weight:700; line-height:1.5; } dialog .row { margin-top:22px; justify-content:flex-end; }
 
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; } }
 </style>
@@ -146,58 +160,54 @@
     <div class="status" id="status"></div>
   </header>
 
+  <div id="banners"></div>
   <div id="wizard"></div>
 
   <div id="app" hidden>
-    <div class="grid">
-      <div class="card">
-        <h2 class="t-title" style="margin-bottom:20px">새 감시 추가</h2>
-        <form class="form" id="form" autocomplete="off">
-          <div class="chips" id="routeChips"></div>
-          <div class="route">
-            <label class="field"><span>출발</span><input class="input" id="dep" list="stations" value="서울" required></label>
-            <button type="button" class="swap" id="swap" aria-label="출발역과 도착역 바꾸기"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v14m0 0-3-3m3 3 3-3M17 20V6m0 0-3 3m3-3 3 3"/></svg></button>
-            <label class="field"><span>도착</span><input class="input" id="arr" list="stations" value="부산" required></label>
-          </div>
-          <datalist id="stations"></datalist>
-
-          <div class="field"><span>날짜</span>
-            <div class="chips" id="dateChips" style="margin-bottom:4px"></div>
-            <input class="input" type="date" id="date" required>
-          </div>
-
-          <div class="field"><span>출발 시간대</span>
-            <div class="chips" id="timeChips" style="margin-bottom:4px"></div>
-            <div class="two"><input class="input" type="time" id="time_from" value="06:00" aria-label="시작 시각"><input class="input" type="time" id="time_to" value="23:59" aria-label="종료 시각"></div>
-          </div>
-
-          <div class="field"><span>좌석</span><div class="chips" id="optionChips"></div></div>
-          <div class="two">
-            <div class="field"><span>열차</span><div class="chips" id="typeChips"></div></div>
-            <div class="field"><span>인원</span><div class="stepper"><button type="button" id="minus" aria-label="인원 줄이기">−</button><output id="adults">1</output><button type="button" id="plus" aria-label="인원 늘리기">＋</button></div></div>
-          </div>
-          <button class="btn block" id="submit">감시 시작</button>
-          <p class="t-small">빈자리가 생기면 자동으로 예약하고 카톡으로 알려요. <b>결제는 직접</b> 코레일톡에서 해야 해요 (약 10분 안).</p>
-        </form>
+    <div class="grid" id="grid">
+      <div>
+        <section id="rsvSection" hidden><div class="section-head"><h2 class="t-title">결제 대기</h2><span class="t-small">기한 안에 코레일톡에서 결제하세요</span></div><div class="list" id="rsvList"></div></section>
+        <section>
+          <div class="section-head"><h2 class="t-title">감시 목록 <span class="t-small num" id="count"></span></h2><span class="t-small">이 PC가 켜져 있고 콘솔 창이 열려 있는 동안만 감시해요</span></div>
+          <div class="list" id="jobs"><div class="skeleton"></div><div class="skeleton"></div></div>
+        </section>
       </div>
 
-      <div class="stack">
-        <div class="card">
-          <h2 class="t-title" style="margin-bottom:16px">오늘 현황</h2>
-          <div class="summary">
-            <div class="stat"><b class="num" id="nWatch">0</b><span>감시 중</span></div>
-            <div class="stat"><b class="num" id="nRsv">0</b><span>결제 대기</span></div>
-          </div>
-          <div class="tip">감시는 <b>이 PC가 켜져 있고 이 창(검은 콘솔 창)이 열려 있는 동안</b>만 돌아가요. 절전 모드는 꺼 두세요.</div>
-        </div>
+      <div class="formcol">
+        <details class="card formcard" id="formBox" open>
+          <summary>새 감시 추가</summary>
+          <form class="form" id="form" autocomplete="off">
+            <div class="chips" id="routeChips"></div>
+            <div class="route">
+              <div class="field"><span>출발</span><div class="combo" id="depBox"></div></div>
+              <button type="button" class="swap" id="swap" aria-label="출발역과 도착역 바꾸기"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v14m0 0-3-3m3 3 3-3M17 20V6m0 0-3 3m3-3 3 3"/></svg></button>
+              <div class="field"><span>도착</span><div class="combo" id="arrBox"></div></div>
+            </div>
+
+            <div class="field"><span>날짜</span>
+              <div class="chips" id="dateChips" style="margin-bottom:4px"></div>
+              <input class="input" type="date" id="date" required>
+            </div>
+
+            <div class="field"><span>출발 시간대</span>
+              <div class="chips" id="timeChips" style="margin-bottom:4px"></div>
+              <div class="two"><input class="input" type="time" id="time_from" value="06:00" aria-label="시작 시각"><input class="input" type="time" id="time_to" value="23:59" aria-label="종료 시각"></div>
+            </div>
+
+            <div class="field"><span>좌석</span><div class="chips" id="optionChips"></div><div class="hint" id="optionHint"></div></div>
+            <div class="two">
+              <div class="field"><span>열차</span><div class="chips" id="typeChips"></div></div>
+              <div class="field"><span>인원</span><div class="stepper"><button type="button" id="minus" aria-label="인원 줄이기">−</button><output id="adults">1</output><button type="button" id="plus" aria-label="인원 늘리기">＋</button></div></div>
+            </div>
+            <button class="btn block" id="submit">감시 시작</button>
+            <p class="t-small">빈자리가 생기면 자동으로 예약하고 카톡으로 알려요. <b>결제는 직접</b> 코레일톡에서 해야 해요 (약 10분 안).</p>
+          </form>
+        </details>
       </div>
     </div>
 
-    <section id="rsvSection" hidden><div class="section-head"><h2 class="t-title">결제 대기</h2><span class="t-small">기한 안에 코레일톡에서 결제하세요</span></div><div class="list" id="rsvList"></div></section>
-    <section><div class="section-head"><h2 class="t-title">감시 목록</h2></div><div class="list" id="jobs"><div class="skeleton"></div><div class="skeleton"></div></div></section>
-
     <section>
-      <details><summary>설정</summary><div class="inner">
+      <details class="box"><summary>설정</summary><div class="inner">
         <div class="row">
           <label class="field"><span>조회 간격 (초, 최소 <span id="minint"></span>)</span><input class="input num" type="number" id="interval" step="1" style="width:140px"></label>
           <button class="btn sub" id="saveInt" type="button">저장</button>
@@ -205,15 +215,17 @@
         </div>
         <p class="t-small">너무 짧게 하면 코레일이 매크로로 판단해 계정/IP를 제한할 수 있어요. 기본 8초를 권장해요.</p>
         <div class="row">
+          <button class="btn sub small" type="button" id="copyCode">카카오 설정 코드 복사 (다른 사람에게 전달용)</button>
           <button class="btn danger small" type="button" id="resetKorail">코레일 계정 지우기</button>
           <button class="btn danger small" type="button" id="resetKakao">카카오 연결 지우기</button>
         </div>
       </div></details>
-      <details><summary>로그</summary><div class="inner"><div class="log" id="logs"></div></div></details>
+      <details class="box"><summary>로그</summary><div class="inner"><div class="log" id="logs"></div></div></details>
     </section>
   </div>
 </main>
 <div id="toasts" aria-live="polite"></div>
+<dialog id="dlg"><p id="dlgMsg"></p><div class="row"><button class="btn sub" id="dlgNo" type="button">아니요</button><button class="btn" id="dlgYes" type="button">네</button></div></dialog>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -222,43 +234,107 @@ const store = { get(k){ try { return localStorage.getItem(k); } catch { return n
 const STATUS = { watching:['감시 중','pri'], reserved:['결제 필요','warn'], done:['종료',''], stopped:['중지됨',''], expired:['기간 만료',''] };
 const ROUTES = [['서울','부산'],['부산','서울'],['서울','대전'],['서울','동대구']];
 const TIMES = [['아침','06:00','10:00'],['낮','10:00','16:00'],['저녁','16:00','23:59'],['종일','00:00','23:59']];
-let S = null;       // 마지막 상태
+const POPULAR = ['서울','용산','광명','수원','천안아산','오송','대전','김천구미','동대구','신경주','울산(통도사)','부산','광주송정','목포','강릉','여수EXPO'];
+const OPTION_ORDER = ['GENERAL_FIRST','GENERAL_ONLY','SPECIAL_ONLY','SPECIAL_FIRST'];
+const OPTION_HINT = {
+  GENERAL_FIRST: '일반실을 먼저 찾고, 일반실이 없으면 특실이라도 잡아요. 특실은 요금이 더 비싸요.',
+  SPECIAL_FIRST: '특실을 먼저 찾고, 없으면 일반실을 잡아요.',
+  GENERAL_ONLY: '일반실 자리가 날 때만 잡아요.',
+  SPECIAL_ONLY: '특실 자리가 날 때만 잡아요. 요금이 더 비싸요.',
+};
+let S = null, failures = 0;
 let form = { option:'GENERAL_FIRST', train_type:'KTX', adults:1 };
-let formReady = false;
-const cards = new Map(); // id -> {el, sig}
+let formReady = false, wizardShown = -1, formOpened = false;
+const cards = new Map();
 
+/* ---------------- 유틸 ---------------- */
 function toast(msg, kind='') { const t = document.createElement('div'); t.className = 'toast ' + kind; t.textContent = msg; $('toasts').append(t); setTimeout(() => t.remove(), kind === 'err' ? 6000 : 3500); }
 async function api(path, method='GET', body) {
   const r = await fetch(path, { method, headers: body ? {'Content-Type':'application/json'} : {}, body: body ? JSON.stringify(body) : undefined });
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(typeof e.detail === 'string' ? e.detail : (e.detail?.[0]?.msg || r.statusText)); }
   return r.json();
 }
+function ask(message, yes = '네', danger = false) {
+  return new Promise(resolve => {
+    const d = $('dlg'); $('dlgMsg').textContent = message; $('dlgYes').textContent = yes; $('dlgYes').className = 'btn' + (danger ? ' danger' : '');
+    const done = v => { d.close(); $('dlgYes').onclick = $('dlgNo').onclick = null; resolve(v); };
+    $('dlgYes').onclick = () => done(true); $('dlgNo').onclick = () => done(false); d.oncancel = () => resolve(false);
+    d.showModal();
+  });
+}
 const ymd = d => new Date(d.getTime() - d.getTimezoneOffset()*6e4).toISOString().slice(0,10);
 function ago(ts) { if (!ts) return '대기 중'; const s = Math.max(0, Math.round(Date.now()/1000 - ts)); return s < 60 ? `${s}초 전` : s < 3600 ? `${Math.floor(s/60)}분 전` : `${Math.floor(s/3600)}시간 전`; }
+const CHO = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ';
+const chosung = s => [...s].map(c => { const n = c.charCodeAt(0) - 0xAC00; return n >= 0 && n < 11172 ? CHO[Math.floor(n / 588)] : c; }).join('');
 
-/* ---------------- 상단 상태 ---------------- */
+/* ---------------- 역 콤보박스: 클릭하면 전체 목록, 입력하면 검색(초성 가능) ---------------- */
+function makeCombo(box, id, initial, placeholder, onChange) {
+  box.innerHTML = `<input class="input" id="${id}" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="${id}List" autocomplete="off" placeholder="${placeholder}" required><ul class="opts" id="${id}List" role="listbox" hidden></ul>`;
+  const input = $(id), list = $(id + 'List'); let valid = initial, typed = false, idx = -1, items = [];
+  input.value = initial;
+  const names = () => S.stations;
+  const opt = n => `<li role="option" data-n="${esc(n)}" aria-selected="${n === items[idx]}">${esc(n)}</li>`;
+  function build() {
+    const q = typed ? input.value.trim() : '';
+    let pop = [], rest;
+    if (!q) { pop = POPULAR.filter(n => names().includes(n)); rest = names().filter(n => !pop.includes(n)); }
+    else { const qc = /^[ㄱ-ㅎ]+$/.test(q); rest = names().filter(n => n.includes(q) || (qc && chosung(n).includes(q))).sort((a, b) => a.indexOf(q) - b.indexOf(q) || a.length - b.length); }
+    items = [...pop, ...rest]; idx = q ? 0 : items.indexOf(valid);
+    let html = '';
+    if (pop.length) html += '<li class="sep">자주 가는 역</li>' + pop.map(opt).join('') + '<li class="sep">전체</li>';
+    html += rest.map(opt).join('');
+    list.innerHTML = html || '<li class="none">검색 결과가 없어요</li>';
+    list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+  }
+  const open = () => { build(); list.hidden = false; input.setAttribute('aria-expanded', 'true'); };
+  const close = () => { list.hidden = true; input.setAttribute('aria-expanded', 'false'); typed = false; };
+  function pick(n) { valid = n; input.value = n; close(); onChange && onChange(n); }
+  const mark = () => { list.querySelectorAll('[role=option]').forEach(li => li.setAttribute('aria-selected', li.dataset.n === items[idx])); list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }); };
+  input.addEventListener('focus', () => { input.select(); open(); });
+  input.addEventListener('click', () => { if (list.hidden) open(); });
+  input.addEventListener('input', () => { typed = true; open(); });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (list.hidden) open(); idx = Math.min(items.length - 1, Math.max(0, idx + (e.key === 'ArrowDown' ? 1 : -1))); mark(); }
+    else if (e.key === 'Enter') { if (!list.hidden && items[idx]) { e.preventDefault(); pick(items[idx]); } }
+    else if (e.key === 'Escape') { input.value = valid; close(); }
+  });
+  list.addEventListener('mousedown', e => { const li = e.target.closest('[data-n]'); if (li) { e.preventDefault(); pick(li.dataset.n); } });
+  input.addEventListener('blur', () => { const exact = names().find(n => n === input.value.trim()); if (exact) pick(exact); else { input.value = valid; close(); } });
+  return { get value() { return valid; }, set(n) { valid = n; input.value = n; onChange && onChange(n); } };
+}
+
+/* ---------------- 배너 / 상단 상태 ---------------- */
+function renderBanners() {
+  const b = [];
+  if (failures >= 2) b.push(`<div class="banner err"><span><b>프로그램과 연결이 끊겼어요.</b> 검은 콘솔 창이 닫혔다면 ktx를 다시 실행하세요. 그동안 <b>감시는 멈춰 있어요.</b></span></div>`);
+  else if (S) {
+    const watching = S.jobs.some(j => j.status === 'watching');
+    if (S.setup.korail && !S.setup.kakao_connected) b.push(`<div class="banner warn"><span><b>카톡이 연결되지 않았어요.</b> 지금은 예약이 되어도 알림이 가지 않아요.${watching ? ' 감시 중인 항목이 있어요!' : ''}</span><button class="btn small" id="bannerKakao">카톡 연결하기</button></div>`);
+    if (S.paused_for) b.push(`<div class="banner err"><span><b>코레일이 접속을 제한했어요.</b> ${Math.ceil(S.paused_for/60)}분 뒤에 자동으로 다시 시도해요. VPN이 켜져 있다면 꺼 주세요.</span></div>`);
+  }
+  $('banners').innerHTML = b.join('');
+  const bk = $('bannerKakao'); if (bk) bk.onclick = () => { store.set('skipKakao', ''); wizardShown = -1; renderWizard(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+}
 function renderStatus() {
   const k = S.setup, ok = !!S.account;
-  const korail = ok ? `<span class="badge ok"><span class="dot"></span>${esc(S.account)}님 · 코레일</span>`
-    : `<span class="badge ${S.setup.korail ? 'err' : ''}"><span class="dot"></span>${esc(S.login)}</span>`;
+  const korail = ok ? `<span class="badge ok"><span class="dot"></span>${esc(S.account)}님 · 코레일</span>` : `<span class="badge ${k.korail ? 'err' : ''}"><span class="dot"></span>${esc(S.login)}</span>`;
   const kakao = k.kakao_connected ? '<span class="badge ok"><span class="dot"></span>카톡 연결됨</span>' : '<span class="badge warn"><span class="dot"></span>카톡 미연결</span>';
-  const pause = S.paused_for ? `<span class="badge err">접속 제한 · ${Math.ceil(S.paused_for/60)}분 대기</span>` : '';
-  $('status').innerHTML = korail + kakao + pause;
+  $('status').innerHTML = korail + kakao;
 }
 
 /* ---------------- 첫 실행 마법사 ---------------- */
 function wizardStep() {
   const k = S.setup;
   if (!k.korail) return 1;
-  if (!k.kakao_key) return store.get('skipKakao') ? 0 : 2;
-  if (!k.kakao_connected) return store.get('skipKakao') ? 0 : 3;
+  if (store.get('skipKakao')) return 0;
+  if (!k.kakao_key) return 2;
+  if (!k.kakao_connected) return 3;
   return 0;
 }
-let wizardShown = -1;
 function renderWizard() {
-  const step = wizardStep();
+  const step = S ? wizardStep() : 0;
   $('app').hidden = !S.setup.korail;
-  if (step === wizardShown) return;   // 입력 중인 폼을 3초마다 지우지 않도록
+  if (step === wizardShown) return;
   wizardShown = step;
   if (!step) { $('wizard').innerHTML = ''; return; }
   const bars = [1,2,3].map(i => `<div class="${i < step ? 'done' : i === step ? 'now' : ''}"></div>`).join('');
@@ -272,31 +348,30 @@ function renderWizard() {
       <button class="btn">확인하고 저장</button>
     </form>`;
   if (step === 2) body = `
-    <h2 class="t-title">카카오 앱 키를 입력해요</h2>
-    <p class="t-small">알림을 내 카톡으로 받기 위한 설정이에요. 앱을 만든 사람에게 받은 키를 넣어 주세요.</p>
+    <h2 class="t-title">카톡 알림을 받을 준비를 해요</h2>
+    <p class="t-small">앱을 만든 사람에게 받은 <b>설정 코드</b>를 붙여 넣어 주세요. 예약이 되면 내 카톡으로 알려드려요.</p>
     <form class="wiz-body" id="wKakao">
-      <label class="field"><span>REST API 키</span><input class="input" id="wKey" required></label>
-      <label class="field"><span>클라이언트 시크릿 (있으면)</span><input class="input" id="wSecret" type="password"></label>
+      <label class="field"><span>설정 코드</span><input class="input" id="wCode" placeholder="전달받은 코드를 붙여넣기" required></label>
       <button class="btn">저장</button>
       <button class="btn sub" type="button" id="skip">나중에 할래요</button>
     </form>`;
   if (step === 3) body = `
-    <h2 class="t-title">카카오톡을 연결해요</h2>
-    <p class="t-small">로그인한 <b>본인 카카오톡 "나와의 채팅"</b>으로 알림이 와요. 아래 주소가 카카오 앱의 Redirect URI에 등록되어 있어야 해요.</p>
+    <h2 class="t-title">내 카카오톡을 연결해요</h2>
+    <p class="t-small">로그인한 <b>본인 카카오톡 "나와의 채팅"</b>으로 알림이 와요.</p>
     <div class="wiz-body">
-      <div class="copy"><span id="ruri">${esc(S.setup.redirect_uri)}</span><button class="btn sub small" type="button" id="copyUri">복사</button></div>
       <a href="/kakao/login" style="text-decoration:none"><button class="btn block" type="button">카카오 계정으로 연결</button></a>
       <button class="btn sub" type="button" id="skip">나중에 할래요</button>
+      <details class="t-small"><summary style="padding:0;font-weight:600">로그인이 안 되나요?</summary>
+        <p style="margin-top:8px">카카오 앱의 Redirect URI에 아래 주소가 등록되어 있어야 해요. 앱을 만든 사람에게 확인하세요.</p>
+        <div class="copy" style="margin-top:8px"><span>${esc(S.setup.redirect_uri)}</span></div></details>
     </div>`;
   $('wizard').innerHTML = `<div class="card wizard"><span class="badge pri">시작하기 ${step} / 3</span><div class="steps">${bars}</div>${body}</div>`;
   const on = (id, ev, fn) => $(id) && $(id).addEventListener(ev, fn);
   on('wKorail', 'submit', async e => { e.preventDefault(); const b = e.target.querySelector('button'); b.disabled = true; b.textContent = '로그인 확인 중…';
     try { const r = await api('/api/setup/korail', 'POST', { user_id: $('wId').value, password: $('wPw').value }); toast(`${r.name}님, 연결됐어요`, 'ok'); await poll(); }
     catch (err) { toast(err.message, 'err'); b.disabled = false; b.textContent = '확인하고 저장'; } });
-  on('wKakao', 'submit', async e => { e.preventDefault();
-    try { await api('/api/setup/kakao', 'POST', { rest_api_key: $('wKey').value, client_secret: $('wSecret').value }); await poll(); } catch (err) { toast(err.message, 'err'); } });
+  on('wKakao', 'submit', async e => { e.preventDefault(); try { await api('/api/setup/kakao', 'POST', { code: $('wCode').value }); await poll(); } catch (err) { toast(err.message, 'err'); } });
   on('skip', 'click', () => { store.set('skipKakao', '1'); wizardShown = -1; poll(); });
-  on('copyUri', 'click', async () => { try { await navigator.clipboard.writeText(S.setup.redirect_uri); toast('복사했어요', 'ok'); } catch { toast('직접 선택해서 복사해 주세요'); } });
 }
 
 /* ---------------- 새 감시 폼 ---------------- */
@@ -304,33 +379,38 @@ function chips(el, items, isOn, onPick) {
   el.innerHTML = items.map(([key, label]) => `<button type="button" class="chip" data-k="${esc(key)}" aria-pressed="${isOn(key)}">${esc(label)}</button>`).join('');
   el.onclick = e => { const b = e.target.closest('.chip'); if (b) { onPick(b.dataset.k); chips(el, items, isOn, onPick); } };
 }
+let dep, arr;
 function initForm() {
   const today = new Date(), day = n => { const d = new Date(today); d.setDate(d.getDate() + n); return d; };
-  const sat = day((6 - today.getDay() + 7) % 7 || 7);
+  const next = w => { const n = (w - today.getDay() + 7) % 7; return n >= 2 ? day(n) : null; };  // 오늘/내일과 겹치면 칩 생략
   $('date').min = $('date').value = ymd(day(0));
-  const dateItems = [[ymd(day(0)),'오늘'],[ymd(day(1)),'내일'],[ymd(sat),'이번 토요일']];
-  chips($('dateChips'), dateItems, k => $('date').value === k, k => { $('date').value = k; });
-  $('date').addEventListener('change', () => chips($('dateChips'), dateItems, k => $('date').value === k, k => { $('date').value = k; }));
+  const dateItems = [[ymd(day(0)),'오늘'],[ymd(day(1)),'내일']];
+  if (next(6)) dateItems.push([ymd(next(6)),'토요일']);
+  if (next(0)) dateItems.push([ymd(next(0)),'일요일']);
+  const redrawDate = () => chips($('dateChips'), dateItems, k => $('date').value === k, k => { $('date').value = k; });
+  redrawDate(); $('date').addEventListener('change', redrawDate);
   const timeKey = () => `${$('time_from').value}-${$('time_to').value}`;
   const timeItems = TIMES.map(([l, a, b]) => [`${a}-${b}`, l]);
   const redrawTime = () => chips($('timeChips'), timeItems, k => timeKey() === k, k => { [$('time_from').value, $('time_to').value] = k.split('-'); });
   redrawTime(); $('time_from').addEventListener('change', redrawTime); $('time_to').addEventListener('change', redrawTime);
-  chips($('optionChips'), Object.entries(S.options), k => form.option === k, k => form.option = k);
+  const redrawOption = () => { chips($('optionChips'), OPTION_ORDER.map(k => [k, S.options[k]]), k => form.option === k, k => { form.option = k; redrawOption(); }); $('optionHint').textContent = OPTION_HINT[form.option]; };
+  redrawOption();
   chips($('typeChips'), [['KTX','KTX'],['ALL','전체']], k => form.train_type === k, k => form.train_type = k);
-  chips($('routeChips'), ROUTES.map(([a,b]) => [`${a}>${b}`, `${a} → ${b}`]), k => `${$('dep').value}>${$('arr').value}` === k, k => { [$('dep').value, $('arr').value] = k.split('>'); redrawRoute(); });
-  const redrawRoute = () => chips($('routeChips'), ROUTES.map(([a,b]) => [`${a}>${b}`, `${a} → ${b}`]), k => `${$('dep').value}>${$('arr').value}` === k, k => { [$('dep').value, $('arr').value] = k.split('>'); redrawRoute(); });
-  $('dep').addEventListener('change', redrawRoute); $('arr').addEventListener('change', redrawRoute);
-  $('swap').onclick = () => { [$('dep').value, $('arr').value] = [$('arr').value, $('dep').value]; $('swap').classList.toggle('spin'); redrawRoute(); };
+  const routeKey = () => `${dep.value}>${arr.value}`;
+  const redrawRoute = () => chips($('routeChips'), ROUTES.map(([a,b]) => [`${a}>${b}`, `${a} → ${b}`]), k => routeKey() === k, k => { dep.set(k.split('>')[0]); arr.set(k.split('>')[1]); });
+  dep = makeCombo($('depBox'), 'dep', '서울', '출발역', () => arr && redrawRoute());
+  arr = makeCombo($('arrBox'), 'arr', '부산', '도착역', redrawRoute);
+  redrawRoute();
+  $('swap').onclick = () => { const a = dep.value, b = arr.value; dep.set(b); arr.set(a); $('swap').classList.toggle('spin'); };
   $('minus').onclick = () => { form.adults = Math.max(1, form.adults - 1); $('adults').textContent = form.adults; };
   $('plus').onclick = () => { form.adults = Math.min(9, form.adults + 1); $('adults').textContent = form.adults; };
   $('form').onsubmit = async e => {
     e.preventDefault();
-    const names = new Set(S.stations);
-    if (names.size && (!names.has($('dep').value) || !names.has($('arr').value))) return toast('역 이름을 목록에서 골라 주세요', 'err');
+    if (dep.value === arr.value) return toast('출발역과 도착역이 같아요', 'err');
     const b = $('submit'); b.disabled = true;
     try {
-      await api('/api/jobs', 'POST', { dep: $('dep').value, arr: $('arr').value, date: $('date').value, time_from: $('time_from').value, time_to: $('time_to').value, option: form.option, train_type: form.train_type, adults: form.adults });
-      toast('감시를 시작했어요', 'ok'); await poll();
+      await api('/api/jobs', 'POST', { dep: dep.value, arr: arr.value, date: $('date').value, time_from: $('time_from').value, time_to: $('time_to').value, option: form.option, train_type: form.train_type, adults: form.adults });
+      toast('감시를 시작했어요', 'ok'); if (!matchMedia('(min-width: 761px)').matches) $('formBox').open = false; await poll();
     } catch (err) { toast(err.message, 'err'); } finally { b.disabled = false; }
   };
   $('interval').value = S.interval; $('minint').textContent = S.min_interval;
@@ -338,12 +418,17 @@ function initForm() {
 }
 
 /* ---------------- 카드 ---------------- */
+function trainsHtml(j) {
+  const ts = j.trains || [];
+  if (!ts.length) return j.checks ? '<div class="trains"><span class="tr">조건에 맞는 열차가 아직 조회되지 않았어요</span></div>' : '';
+  const show = ts.slice(0, 14).map(t => { const have = j.option === 'GENERAL_ONLY' ? t.g : j.option === 'SPECIAL_ONLY' ? t.s : (t.g || t.s);
+    return `<span class="tr ${have ? 'have' : ''}" title="${esc(t.no)}">${esc(t.t)} ${have ? (t.g && t.s ? '자리 있음' : t.g ? '일반실 있음' : '특실 있음') : '매진'}</span>`; }).join('');
+  return `<div class="trains">${show}${ts.length > 14 ? `<span class="tr">외 ${ts.length - 14}편</span>` : ''}</div>`;
+}
 function jobHtml(j) {
   const [label, cls] = STATUS[j.status] || [j.status, ''];
   const r = j.result, o = S.options[j.option];
   const pulse = j.status === 'watching' ? ' pulse' : '';
-  const title = `<div class="route-line">${esc(j.dep)} <span style="color:var(--mute)">→</span> ${esc(j.arr)} <span class="badge ${cls}"><span class="dot${pulse}"></span>${label}</span></div>`;
-  const meta = `<div class="meta">${esc(j.date)} · ${esc(j.time_from)}~${esc(j.time_to)} · ${esc(o)} · ${j.train_type === 'KTX' ? 'KTX' : '전체'} · ${j.adults}명</div>`;
   if (j.status === 'reserved' && r) {
     return `<div><div class="route-line"><svg class="check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></svg>예약됐어요! ${esc(j.dep)} → ${esc(j.arr)}</div>
       <div class="big">${esc(r.train)}</div><div class="meta">${esc(j.date)} · ${r.price.toLocaleString()}원 · 결제기한 ${esc(r.buy_limit)}</div>
@@ -354,7 +439,10 @@ function jobHtml(j) {
     j.status === 'watching' ? `<button class="btn sub small" data-act="stop" data-id="${j.id}">중지</button>` : '',
     ['stopped','expired','done'].includes(j.status) ? `<button class="btn sub small" data-act="resume" data-id="${j.id}">다시 감시</button>` : '',
     `<button class="btn danger small" data-act="del" data-id="${j.id}">삭제</button>`].join('');
-  return `<div>${title}${meta}<div class="metrics t-small"><span>조회 <b class="num chk" style="color:var(--text)">${j.checks}</b>회</span><span class="last" data-ts="${j.last_checked_ts || ''}">최근 조회 ${ago(j.last_checked_ts)}</span></div></div><div class="actions">${btns}</div>`;
+  return `<div><div class="route-line">${esc(j.dep)} <span style="color:var(--mute)">→</span> ${esc(j.arr)} <span class="badge ${cls}"><span class="dot${pulse}"></span>${label}</span></div>
+    <div class="meta">${esc(j.date)} · ${esc(j.time_from)}~${esc(j.time_to)} · ${esc(o)} · ${j.train_type === 'KTX' ? 'KTX' : '전체'} · ${j.adults}명</div>
+    ${trainsHtml(j)}
+    <div class="metrics t-small"><span>조회 <b class="num chk" style="color:var(--text)">${j.checks}</b>회</span><span class="last" data-ts="${j.last_checked_ts || ''}">최근 조회 ${ago(j.last_checked_ts)}</span></div></div><div class="actions">${btns}</div>`;
 }
 function syncList(jobs, listEl, emptyHtml) {
   let i = 0;
@@ -367,7 +455,7 @@ function syncList(jobs, listEl, emptyHtml) {
       c.el.className = `job ${j.status === 'reserved' ? 'reserved' : ''} ${first ? 'enter' : ''}`;
       if (first) c.el.style.setProperty('--i', i++);
       c.el.innerHTML = jobHtml(j); c.sig = sig;
-    } else {  // 구조는 그대로, 숫자만 갱신 (애니메이션/호버 유지)
+    } else {
       const n = c.el.querySelector('.chk'); if (n) n.textContent = j.checks;
       const last = c.el.querySelector('.last'); if (last) last.dataset.ts = j.last_checked_ts || '';
     }
@@ -379,8 +467,8 @@ document.addEventListener('click', async e => {
   const b = e.target.closest('[data-act]'); if (!b) return;
   const { act, id } = b.dataset;
   try {
-    if (act === 'del') { if (!confirm('이 항목을 지울까요?')) return; await api(`/api/jobs/${id}`, 'DELETE'); }
-    else if (act === 'cancel') { if (!confirm('예약을 취소하고 좌석을 반납할까요?')) return; await api(`/api/jobs/${id}/cancel`, 'POST'); toast('예약을 취소했어요'); }
+    if (act === 'del') { if (!await ask('이 항목을 지울까요?', '지우기', true)) return; await api(`/api/jobs/${id}`, 'DELETE'); }
+    else if (act === 'cancel') { if (!await ask('예약을 취소하고 좌석을 반납할까요?', '예약 취소', true)) return; await api(`/api/jobs/${id}/cancel`, 'POST'); toast('예약을 취소했어요'); }
     else await api(`/api/jobs/${id}/${act}`, 'POST');
     await poll();
   } catch (err) { toast(err.message, 'err'); }
@@ -391,12 +479,14 @@ function renderJobs() {
   for (const [id, c] of cards) if (!alive.has(id)) { c.el.remove(); cards.delete(id); }
   $('rsvSection').hidden = !rsv.length;
   syncList(rsv, $('rsvList'), '');
-  syncList(rest, $('jobs'), '<div class="empty"><div class="ico">🚆</div><b>아직 감시 중인 열차가 없어요</b><div class="t-small" style="margin-top:4px">왼쪽에서 노선과 날짜를 고르고 감시를 시작해 보세요.</div></div>');
-  $('nWatch').textContent = S.jobs.filter(j => j.status === 'watching').length;
-  $('nRsv').textContent = rsv.length;
+  syncList(rest, $('jobs'), '<div class="empty"><div class="ico">🚆</div><b>아직 감시 중인 열차가 없어요</b><div class="t-small" style="margin-top:4px">노선과 날짜를 고르고 감시를 시작해 보세요.</div></div>');
+  const n = S.jobs.filter(j => j.status === 'watching').length;
+  $('count').textContent = S.jobs.length ? `· 감시 중 ${n}건` : '';
+  $('grid').classList.toggle('nojobs', !S.jobs.length);
+  if (!formOpened) { formOpened = true; $('formBox').open = matchMedia('(min-width: 761px)').matches || !S.jobs.length; }
 }
 
-/* ---------------- 카운트다운 / 상대 시간 (1초) ---------------- */
+/* ---------------- 1초 타이머: 결제 카운트다운 / 상대 시간 ---------------- */
 setInterval(() => {
   document.querySelectorAll('.countdown[data-iso]').forEach(el => {
     const end = new Date(el.dataset.iso).getTime(); if (!end) return;
@@ -409,20 +499,21 @@ setInterval(() => {
 
 /* ---------------- 폴링 ---------------- */
 async function poll() {
-  try { S = await api('/api/state'); } catch { return; }
-  renderStatus(); renderWizard();
+  try { S = await api('/api/state'); failures = 0; } catch { failures++; renderBanners(); return; }
+  renderStatus(); renderWizard(); renderBanners();
   if (!S.setup.korail) return;
-  if (!formReady && S.stations.length) { $('stations').innerHTML = S.stations.map(s => `<option value="${esc(s)}">`).join(''); initForm(); }
+  if (!formReady && S.stations.length) initForm();
   renderJobs();
   $('logs').innerHTML = S.logs.map(l => `<div class="${l.level}">${esc(l.t)}  ${esc(l.msg)}</div>`).join('') || '<span class="t-small">아직 로그가 없어요.</span>';
 }
 $('saveInt').onclick = async () => { try { const r = await api('/api/settings', 'POST', { interval: +$('interval').value }); $('interval').value = r.interval; toast('저장했어요', 'ok'); } catch (e) { toast(e.message, 'err'); } };
 $('kakaoTest').onclick = async () => { try { await api('/api/kakao/test', 'POST'); toast('보냈어요. 카톡을 확인하세요', 'ok'); } catch (e) { toast(e.message, 'err'); } };
-$('resetKorail').onclick = async () => { if (confirm('저장된 코레일 계정을 지울까요? 감시는 멈춰요.')) { await api('/api/setup/reset/korail', 'POST'); wizardShown = -1; formReady = false; poll(); } };
-$('resetKakao').onclick = async () => { if (confirm('카카오 연결을 지울까요?')) { await api('/api/setup/reset/kakao', 'POST'); store.set('skipKakao', ''); wizardShown = -1; poll(); } };
+$('copyCode').onclick = async () => { try { const r = await api('/api/setup/kakao/code'); await navigator.clipboard.writeText(r.code); toast('설정 코드를 복사했어요. 카톡 등으로 전달하세요 (다른 곳에 공개하지 마세요)', 'ok'); } catch (e) { toast(e.message, 'err'); } };
+$('resetKorail').onclick = async () => { if (await ask('저장된 코레일 계정을 지울까요? 감시는 멈춰요.', '지우기', true)) { await api('/api/setup/reset/korail', 'POST'); wizardShown = -1; formReady = false; poll(); } };
+$('resetKakao').onclick = async () => { if (await ask('카카오 연결을 지울까요?', '지우기', true)) { await api('/api/setup/reset/kakao', 'POST'); store.set('skipKakao', ''); wizardShown = -1; poll(); } };
 
 const q = new URLSearchParams(location.search);
-if (q.get('kakao') === 'ok') toast('카카오톡이 연결됐어요', 'ok');
+if (q.get('kakao') === 'ok') { store.set('skipKakao', ''); toast('카카오톡이 연결됐어요', 'ok'); }
 if (q.get('kakao_error')) toast('카카오 연결 실패: ' + q.get('kakao_error'), 'err');
 if (q.size) history.replaceState(null, '', '/');
 poll(); setInterval(poll, 3000);

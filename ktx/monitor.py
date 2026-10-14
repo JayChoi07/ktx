@@ -29,7 +29,13 @@ log = logging.getLogger("ktx")
 MIN_INTERVAL = 5.0  # 이보다 빠르게 조회하면 계정 정지 위험
 BLOCK_PAUSE = 600  # 이용제한 감지 시 쉬는 시간(초)
 REMIND_EVERY = 120  # 결제 재알림 간격(초)
-OPTIONS = {"GENERAL_FIRST": "일반실 우선", "GENERAL_ONLY": "일반실만", "SPECIAL_FIRST": "특실 우선", "SPECIAL_ONLY": "특실만"}
+# *_FIRST 는 선호하는 쪽이 없으면 다른 쪽 좌석이라도 잡는다 ("전부"). *_ONLY 는 그 등급만.
+OPTIONS = {
+    "GENERAL_FIRST": "전부 (일반실 먼저)",
+    "GENERAL_ONLY": "일반실만",
+    "SPECIAL_ONLY": "특실만",
+    "SPECIAL_FIRST": "전부 (특실 먼저)",
+}
 TRAIN_TYPES = {"KTX": "100", "ALL": "109"}
 
 
@@ -50,6 +56,17 @@ def friendly(e: Exception) -> str:
     if isinstance(e, (ConnectionError, TimeoutError)):
         return "인터넷 연결을 확인하세요."
     return str(e)
+
+
+def _snapshot(job: dict, trains: list) -> list[dict]:
+    """감시 조건(날짜·시간대)에 해당하는 열차와 현재 좌석 상태 — 카드에 보여주기 위한 요약."""
+    ymd = job["date"].replace("-", "")
+    lo, hi = job["time_from"].replace(":", ""), job["time_to"].replace(":", "")
+    return [
+        {"t": _hhmm(t.dep_time), "no": f"{t.train_type_name} {t.train_no}", "g": t.has_general_seat(), "s": t.has_special_seat()}
+        for t in trains
+        if t.dep_date == ymd and lo <= t.dep_time[:4] <= hi
+    ]
 
 
 def _has_seat(train, option: str) -> bool:
@@ -233,7 +250,7 @@ class Monitor:
             return
         now = datetime.now().strftime("%m/%d %H:%M:%S")
         for job in jobs:
-            self.jobs.update(job["id"], checks=job["checks"] + 1, last_checked=now, last_checked_ts=time.time())
+            self.jobs.update(job["id"], checks=job["checks"] + 1, last_checked=now, last_checked_ts=time.time(), trains=_snapshot(job, trains))
             self._try_reserve(job, trains)
 
     def _try_reserve(self, job: dict, trains: list) -> None:

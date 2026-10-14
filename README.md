@@ -31,7 +31,7 @@ Pages: 저장소 Settings → Pages → Source를 **GitHub Actions**로 설정.
 1. <https://developers.kakao.com> 에서 앱 생성 → **REST API 키**
 2. [카카오 로그인] 활성화, Redirect URI `http://localhost:8000/kakao/callback` 등록
 3. [동의항목] → **카카오톡 메시지 전송(talk_message)** 선택 동의
-4. 클라이언트 시크릿을 켰다면 그 값도 함께 사용자에게 전달
+4. 웹 UI 설정 → **카카오 설정 코드 복사**로 키+시크릿을 코드 하나로 만들어 사용할 사람에게 전달 (사용자는 첫 실행 마법사에 붙여 넣기)
 5. 다른 사람(예: 가족)이 로그인이 안 되면 [앱 설정 → 팀 멤버]에 그 계정을 초대
 
 > REST API 키/시크릿은 **저장소에 넣지 말고** 사용할 사람에게 따로 전달하세요.
