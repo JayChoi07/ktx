@@ -161,7 +161,7 @@
   #toasts { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); display:flex; flex-direction:column; gap:8px; z-index:50; width:min(420px, calc(100vw - 32px)); }
   .toast { background:#191f28; color:#fff; padding:14px 18px; border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,.2); animation: rise .3s var(--ease) both; font-weight:500; }
   .toast.err { background:var(--err); } .toast.ok { background:var(--ok); }
-  dialog { border:0; border-radius:20px; padding:26px; width:min(380px, calc(100vw - 32px)); box-shadow:0 20px 60px rgba(0,0,0,.25); color:var(--text); }
+  dialog { background:var(--card); border:0; border-radius:20px; padding:26px; width:min(380px, calc(100vw - 32px)); box-shadow:0 20px 60px rgba(0,0,0,.25); color:var(--text); }
   dialog::backdrop { background:rgba(25,31,40,.45); }
   dialog[open] { animation: rise .25s var(--ease); }
   #dlg p { font-size:17px; font-weight:700; line-height:1.5; } #dlg .row { margin-top:22px; justify-content:flex-end; }
@@ -283,7 +283,11 @@ function makeCombo(box, id, initial, placeholder, onChange) {
     const q = typed ? input.value.trim() : '';
     let pop = [], rest;
     if (!q) { pop = POPULAR.filter(n => names().includes(n)); rest = names().filter(n => !pop.includes(n)); }
-    else { const qc = /^[ㄱ-ㅎ]+$/.test(q); rest = names().filter(n => n.includes(q) || (qc && chosung(n).includes(q))).sort((a, b) => a.indexOf(q) - b.indexOf(q) || a.length - b.length); }
+    else {  // 검색 순위: 앞글자 일치 > 자주 가는 역 > 짧은 이름
+      const qc = /^[ㄱ-ㅎ]+$/.test(q), key = n => qc ? chosung(n) : n;
+      const rank = n => (key(n).startsWith(q) ? 0 : 2) + (POPULAR.includes(n) ? 0 : 1);
+      rest = names().filter(n => key(n).includes(q)).sort((a, b) => rank(a) - rank(b) || a.length - b.length);
+    }
     items = [...pop, ...rest]; idx = q ? 0 : items.indexOf(valid);
     let html = '';
     if (pop.length) html += '<li class="sep">자주 가는 역</li>' + pop.map(opt).join('') + '<li class="sep">전체</li>';
@@ -314,7 +318,7 @@ function renderBanners() {
   if (failures >= 2) b.push(`<div class="banner err"><span><b>프로그램과 연결이 끊겼어요.</b> 검은 콘솔 창이 닫혔다면 ktx를 다시 실행하세요. 그동안 <b>감시는 멈춰 있어요.</b></span></div>`);
   else if (S) {
     const watching = S.jobs.some(j => j.status === 'watching');
-    if (S.setup.korail && !S.setup.kakao_connected) b.push(`<div class="banner warn"><span><b>카톡이 연결되지 않았어요.</b> 지금은 예약이 되어도 알림이 가지 않아요.${watching ? ' 감시 중인 항목이 있어요!' : ''}</span><button class="btn small" id="bannerKakao">카톡 연결하기</button></div>`);
+    if (S.setup.korail && !S.setup.kakao_connected && wizardStep() === 0) b.push(`<div class="banner warn"><span><b>카톡이 연결되지 않았어요.</b> 지금은 예약이 되어도 알림이 가지 않아요.${watching ? ' 감시 중인 항목이 있어요!' : ''}</span><button class="btn small" id="bannerKakao">카톡 연결하기</button></div>`);
     if (S.paused_for) b.push(`<div class="banner err"><span><b>코레일이 접속을 제한했어요.</b> ${Math.ceil(S.paused_for/60)}분 뒤에 자동으로 다시 시도해요. VPN이 켜져 있다면 꺼 주세요.</span></div>`);
   }
   $('banners').innerHTML = b.join('');

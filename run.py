@@ -22,8 +22,9 @@ def _already_running() -> bool:
 
 def main() -> None:
     if _already_running():
-        print(f"이미 실행 중입니다. 브라우저를 엽니다: {URL}")
-        webbrowser.open(URL)
+        print(f"이미 실행 중입니다: {URL}")
+        if os.environ.get("KTX_NO_BROWSER") != "1":
+            webbrowser.open(URL)
         return
     from ktx.app import app
 

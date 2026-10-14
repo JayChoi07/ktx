@@ -18,10 +18,14 @@ KTX 매진 열차를 감시하다가 자리가 나면 **자동 예약**하고 **
 
 ```bash
 uv sync
-cp .env.example .env      # (선택) 개발용. 실사용은 웹 UI 마법사에서 입력
-uv run python run.py      # http://localhost:8000
+uv run python run.py      # http://localhost:8000 — 계정/키는 웹 UI 첫 실행 마법사에서 입력
 uv run pyinstaller ktx.spec   # dist/ktx.exe
+
+# E2E 테스트 (실제 브라우저 + 실제 코레일 로그인, 별도 포트/저장소 사용)
+KTX_TEST_KORAIL_ID=... KTX_TEST_KORAIL_PW=... uv run pytest tests/test_e2e.py -v
 ```
+
+계정과 키는 `.env`가 아니라 Windows 자격 증명 관리자(keyring, 서비스명 `ktx-macro`)에만 저장됩니다.
 
 릴리스: `git tag v1.0.0 && git push --tags` → GitHub Actions가 exe를 빌드해 Releases에 올립니다.
 Pages: 저장소 Settings → Pages → Source를 **GitHub Actions**로 설정.

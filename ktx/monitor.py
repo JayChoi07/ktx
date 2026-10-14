@@ -263,7 +263,7 @@ class Monitor:
             key = f"{t.dep_date}-{t.train_no}"
             if key in taken or not _has_seat(t, job["option"]):
                 continue
-            self.say(f"빈자리 발견: {t.summary} → 예약 시도")
+            self.say(f"빈자리 발견: {t.summary()} → 예약 시도")
             try:
                 rsv = self.korail.reservations.create(t, passengers=[AdultPassenger(job["adults"])], option=job["option"])
             except SoldOutError:

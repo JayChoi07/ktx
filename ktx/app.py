@@ -11,16 +11,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
-from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel, Field, field_validator
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
-from fastapi import FastAPI, HTTPException, Request  # noqa: E402
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse  # noqa: E402
-from pydantic import BaseModel, Field, field_validator  # noqa: E402
-
-from . import config, kakao  # noqa: E402
-from .monitor import MIN_INTERVAL, OPTIONS, TRAIN_TYPES, Monitor  # noqa: E402
+from . import config, kakao
+from .monitor import MIN_INTERVAL, OPTIONS, TRAIN_TYPES, Monitor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 monitor = Monitor()
