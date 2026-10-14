@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 
 import keyring
@@ -27,7 +28,5 @@ def put(name: str, value: str) -> None:
 
 def remove(*names: str) -> None:
     for name in names:
-        try:
+        with contextlib.suppress(PasswordDeleteError, KeyringError):  # 없는 항목 삭제는 성공으로 본다
             keyring.delete_password(SERVICE, name)
-        except (PasswordDeleteError, KeyringError):
-            pass

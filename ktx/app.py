@@ -120,7 +120,7 @@ def job_action(job_id: str, action: str):
         try:
             monitor.cancel_reservation(job_id)
         except Exception as e:
-            raise HTTPException(400, f"예약 취소 실패: {e}")
+            raise HTTPException(400, f"예약 취소 실패: {e}") from e
         monitor.jobs.update(job_id, status="stopped")
     else:
         raise HTTPException(404)
@@ -154,7 +154,7 @@ def setup_korail(body: KorailIn):
     try:
         name = monitor.setup_korail(body.user_id.strip(), body.password)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return {"name": name}
 
 
@@ -169,7 +169,7 @@ def _decode_code(code: str) -> tuple[str, str]:
         raw = json.loads(base64.urlsafe_b64decode(code.strip() + "=" * (-len(code.strip()) % 4)))
         return str(raw["k"]), str(raw.get("s", ""))
     except Exception:
-        raise HTTPException(400, "설정 코드가 올바르지 않아요. 전달받은 코드를 그대로 붙여 넣어 주세요.")
+        raise HTTPException(400, "설정 코드가 올바르지 않아요. 전달받은 코드를 그대로 붙여 넣어 주세요.") from None
 
 
 @app.get("/api/setup/kakao/code")
@@ -235,5 +235,5 @@ def kakao_test():
     try:
         kakao.send("[KTX] 테스트 알림입니다. 이 메시지가 보이면 연결 성공!")
     except Exception as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return {"ok": True}

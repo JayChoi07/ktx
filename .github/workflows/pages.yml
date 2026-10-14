@@ -25,6 +25,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true  # 저장소 설정에서 Pages 를 따로 켜지 않아도 되게
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs

@@ -15,4 +15,16 @@ dev = [
     "playwright>=1.64.0",
     "pyinstaller>=6.22.3",
     "pytest>=9.1.1",
+    "ruff>=0.17.0",
 ]
+
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

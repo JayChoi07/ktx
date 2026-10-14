@@ -14,6 +14,7 @@ from pykorail import AdultPassenger, Korail
 from pykorail.device import DeviceProfile, random_profile
 from pykorail.exceptions import (
     AccessRestrictedError,
+    HttpStatusError,
     KorailError,
     LoginFailedError,
     NeedToLoginError,
@@ -47,14 +48,20 @@ def _fmt_limit(d: str, t: str) -> str:
     return f"{d[4:6]}/{d[6:8]} {t[:2]}:{t[2:4]}"
 
 
+# pykorail 은 curl_cffi(없으면 requests) 로 통신하므로 네트워크 예외 타입을 직접 import 할 수 없다 — 클래스 이름으로 판별한다.
+_NETWORK_ERROR_NAMES = {"ConnectionError", "ConnectError", "Timeout", "TimeoutError", "ReadTimeout", "RequestException", "RequestsError"}
+
+
 def friendly(e: Exception) -> str:
     """코레일 예외를 사용자가 읽을 수 있는 안내문으로 바꾼다."""
     if isinstance(e, AccessRestrictedError):
         return "코레일이 접속을 제한했어요. VPN/프록시를 끄고, 잠시 뒤에 다시 시도하세요. (회사·집 일반 네트워크에서 실행해야 해요)"
     if isinstance(e, LoginFailedError):
         return f"코레일 로그인에 실패했어요. 아이디/비밀번호를 확인하세요. ({e})"
-    if isinstance(e, (ConnectionError, TimeoutError)):
-        return "인터넷 연결을 확인하세요."
+    if isinstance(e, HttpStatusError):
+        return f"코레일 서버가 정상 응답하지 않아요 (HTTP {e.status_code}). 잠시 뒤 자동으로 다시 시도해요."
+    if {c.__name__ for c in type(e).__mro__} & _NETWORK_ERROR_NAMES:
+        return "인터넷 연결을 확인하세요. 연결되면 자동으로 다시 시도해요."
     return str(e)
 
 
@@ -206,10 +213,12 @@ class Monitor:
     def _tick(self) -> None:
         if time.time() < self.paused_until:
             return
-        today = datetime.now().strftime("%Y-%m-%d")
-        for j in self.jobs.all():  # 지난 날짜 작업 정리
-            if j["status"] == "watching" and j["date"] < today:
+        now = datetime.now()
+        today, hhmm = now.strftime("%Y-%m-%d"), now.strftime("%H:%M")
+        for j in self.jobs.all():  # 지난 날짜·이미 지나간 시간대 작업 정리
+            if j["status"] == "watching" and (j["date"] < today or (j["date"] == today and j["time_to"] < hhmm)):
                 self.jobs.update(j["id"], status="expired")
+                self.say(f"기간이 지나 감시를 종료했어요: {j['dep']}→{j['arr']} {j['date']} {j['time_from']}~{j['time_to']}")
         jobs = self.jobs.all()
         watching = [j for j in jobs if j["status"] == "watching"]
         reserved = [j for j in jobs if j["status"] == "reserved"]
@@ -250,7 +259,9 @@ class Monitor:
             return
         now = datetime.now().strftime("%m/%d %H:%M:%S")
         for job in jobs:
-            self.jobs.update(job["id"], checks=job["checks"] + 1, last_checked=now, last_checked_ts=time.time(), trains=_snapshot(job, trains))
+            self.jobs.update(
+                job["id"], checks=job["checks"] + 1, last_checked=now, last_checked_ts=time.time(), trains=_snapshot(job, trains)
+            )
             self._try_reserve(job, trains)
 
     def _try_reserve(self, job: dict, trains: list) -> None:

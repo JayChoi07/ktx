@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
 import re
@@ -38,10 +39,8 @@ pytestmark = pytest.mark.skipif(not (KID and KPW), reason="KTX_TEST_KORAIL_ID / 
 
 def _clean_keyring() -> None:
     for n in NAMES:
-        try:
+        with contextlib.suppress(Exception):
             keyring.delete_password(SERVICE, n)
-        except Exception:
-            pass
 
 
 def _port_open() -> bool:
@@ -59,18 +58,19 @@ def data_dir(tmp_path_factory):
 def server(data_dir):
     assert not _port_open(), f"포트 {PORT} 가 이미 사용 중"
     _clean_keyring()
-    env = {**os.environ, "KTX_PORT": str(PORT), "KTX_DATA_DIR": str(data_dir), "KTX_KEYRING_SERVICE": SERVICE, "KTX_NO_BROWSER": "1", "PYTHONUTF8": "1"}
-    log = open(data_dir / "server.log", "w", encoding="utf-8")
-    proc = subprocess.Popen([sys.executable, "run.py"], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
-    for _ in range(100):
-        if _port_open():
-            break
-        time.sleep(0.2)
-    else:
+    env = {**os.environ, "KTX_PORT": str(PORT), "KTX_DATA_DIR": str(data_dir), "KTX_KEYRING_SERVICE": SERVICE}
+    env.update({"KTX_NO_BROWSER": "1", "PYTHONUTF8": "1"})
+    with open(data_dir / "server.log", "w", encoding="utf-8") as log:
+        proc = subprocess.Popen([sys.executable, "run.py"], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+        for _ in range(100):
+            if _port_open():
+                break
+            time.sleep(0.2)
+        else:
+            proc.kill()
+            pytest.fail("서버가 뜨지 않음: " + (data_dir / "server.log").read_text(encoding="utf-8")[-2000:])
+        yield proc
         proc.kill()
-        pytest.fail("서버가 뜨지 않음: " + (data_dir / "server.log").read_text(encoding="utf-8")[-2000:])
-    yield proc
-    proc.kill()
     _clean_keyring()
 
 
@@ -267,6 +267,17 @@ def test_10_delete_korail_account_returns_to_wizard(page):
     time.sleep(3)  # 감시 루프가 몰래 다시 로그인하지 않는지
     assert state()["account"] is None
     shot(page, "10-after-delete-account")
+    # 설정 창에서도 '계정 지우기'가 아니라 '계정 연결하기'가 보여야 한다
+    page.click("#gear")
+    sheet = page.locator("#settings")
+    expect(sheet).to_contain_text("코레일 계정 설정 필요")
+    expect(sheet.locator("#sResetKorail")).to_have_count(0)
+    expect(sheet.locator("#sLinkKorail")).to_be_visible()
+    page.wait_for_timeout(400)
+    shot(page, "10b-settings-without-account")
+    page.click("#sLinkKorail")
+    expect(sheet).to_be_hidden()
+    expect(page.locator("#wizard")).to_be_in_viewport()
     # 다시 설정하면 정상 복귀
     page.fill("#wId", KID)
     page.fill("#wPw", KPW)
@@ -281,10 +292,11 @@ def test_10_delete_korail_account_returns_to_wizard(page):
 # ---------------------------------------------------------------- 4. 예약 카드 / 카톡 설정 코드
 def test_11_reserved_card_and_expiry(page, data_dir):
     limit = datetime.now() + timedelta(minutes=7)
-    job = {"id": "rsvtest", "dep": "서울", "arr": "부산", "date": limit.strftime("%Y-%m-%d"), "time_from": "06:00", "time_to": "10:00", "option": "GENERAL_FIRST",
-           "train_type": "KTX", "adults": 1, "status": "reserved", "checks": 5, "last_checked": None, "last_checked_ts": time.time(),
-           "result": {"rsv_id": "TEST-NONE", "train_key": "x", "train": "KTX 083 서울→부산 07:00~09:40", "price": 59800,
-                      "buy_limit": limit.strftime("%m/%d %H:%M"), "buy_limit_iso": limit.strftime("%Y-%m-%dT%H:%M:00"), "seats": []}}
+    result = {"rsv_id": "TEST-NONE", "train_key": "x", "train": "KTX 083 서울→부산 07:00~09:40", "price": 59800, "seats": [],
+              "buy_limit": limit.strftime("%m/%d %H:%M"), "buy_limit_iso": limit.strftime("%Y-%m-%dT%H:%M:00")}
+    job = {"id": "rsvtest", "dep": "서울", "arr": "부산", "date": limit.strftime("%Y-%m-%d"), "time_from": "06:00", "time_to": "10:00",
+           "option": "GENERAL_FIRST", "train_type": "KTX", "adults": 1, "status": "reserved", "checks": 5, "last_checked": None,
+           "last_checked_ts": time.time(), "result": result}
     (data_dir / "jobs.json").write_text(json.dumps([job], ensure_ascii=False), encoding="utf-8")
     page.reload()
     sec = page.locator("#rsvSection")

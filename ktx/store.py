@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+
 def _data_dir() -> Path:
     if override := os.environ.get("KTX_DATA_DIR"):
         return Path(override)

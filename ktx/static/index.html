@@ -540,7 +540,8 @@ function renderSettings() {
       <div class="row">${k.kakao_key ? '<button class="btn sub small" id="sCode">설정 코드 복사 (다른 사람에게 전달)</button>' : ''}
         <button class="btn danger small" id="sResetKakao">카카오 설정 지우기</button></div></div>
     <div class="set"><h3>코레일 계정</h3>
-      <div class="line"><span>${ok ? `<span class="badge ok"><span class="dot"></span>${esc(S.account)}님</span>` : esc(S.login)}</span><button class="btn danger small" id="sResetKorail">계정 지우기</button></div></div>
+      <div class="line"><span>${ok ? `<span class="badge ok"><span class="dot"></span>${esc(S.account)}님</span>` : esc(S.login)}</span>
+        ${k.korail ? '<button class="btn danger small" id="sResetKorail">계정 지우기</button>' : '<button class="btn small" id="sLinkKorail">계정 연결하기</button>'}</div></div>
     <div class="set"><h3>조회 간격</h3><p class="t-small">짧을수록 빨리 잡지만, 너무 짧으면 코레일이 매크로로 보고 계정/IP를 제한할 수 있어요.</p>
       <div class="chips" id="sInt">${INTERVALS.map(([v, l]) => `<button type="button" class="chip" data-v="${v}" aria-pressed="${S.interval === v}">${l}</button>`).join('')}</div>
       <p class="t-small" style="margin:10px 0 0">현재 ${S.interval}초 · 최소 ${S.min_interval}초</p></div>
@@ -549,6 +550,7 @@ function renderSettings() {
   on('sTest', async () => { try { await api('/api/kakao/test', 'POST'); toast('보냈어요. 카톡을 확인하세요', 'ok'); } catch (e) { toast(e.message, 'err'); } });
   on('sCode', async () => { try { const r = await api('/api/setup/kakao/code'); await navigator.clipboard.writeText(r.code); toast('설정 코드를 복사했어요. 비공개로만 전달하세요', 'ok'); } catch (e) { toast(e.message, 'err'); } });
   on('sResetKakao', async () => { if (await ask('카카오 설정과 연결을 지울까요?', '지우기', true)) { await api('/api/setup/reset/kakao', 'POST'); store.set('skipKakao', ''); wizardShown = -1; await poll(); renderSettings(); } });
+  on('sLinkKorail', () => { $('settings').close(); wizardShown = -1; poll().then(() => $('wizard').scrollIntoView({ behavior: 'smooth', block: 'start' })); });
   on('sResetKorail', async () => { if (await ask('저장된 코레일 계정을 지울까요? 감시는 멈춰요.', '지우기', true)) { await api('/api/setup/reset/korail', 'POST'); $('settings').close(); wizardShown = -1; formReady = false; poll(); } });
   $('sInt').onclick = async e => { const b = e.target.closest('[data-v]'); if (!b) return; try { await api('/api/settings', 'POST', { interval: +b.dataset.v }); toast(`조회 간격을 ${b.dataset.v}초로 바꿨어요`, 'ok'); await poll(); renderSettings(); } catch (err) { toast(err.message, 'err'); } };
 }
