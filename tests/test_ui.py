@@ -142,6 +142,37 @@ def test_settings_sheet_shows_discord_and_version(open_page):
     expect(page2.locator("#settings #sLinkDiscord")).to_be_visible()
 
 
+# ---------------------------------------------------------------- 예약 완료 카드
+def paid_job() -> dict:
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    return {
+        "id": "paid1", "dep": "서울", "arr": "부산", "date": tomorrow, "time_from": "08:00", "time_to": "10:00", "option": "GENERAL_FIRST",
+        "train_type": "KTX", "adults": 2, "status": "paid", "checks": 7, "last_checked": None, "last_checked_ts": 0,
+        "result": {
+            "rsv_id": "320261019830259", "train_key": "x", "train": "KTX 103 서울→부산 09:28~12:35", "price": 97200,
+            "buy_limit": "10/15 09:18", "buy_limit_iso": "2026-10-15T09:18:00", "seats": [],
+            "paid": {"seats": ["10호차 1B", "16호차 1C"], "price": 97200},
+        },
+    }  # fmt: skip
+
+
+def test_paid_job_is_shown_as_a_completed_booking(open_page):
+    """결제까지 끝난 건이 '종료'로 보이던 것 — 열차·좌석·금액이 보이는 '예약 완료'여야 한다."""
+    page, _ = open_page(state(jobs=[paid_job()]))
+    card = page.locator("#jobs .job.paid")
+    expect(card).to_have_count(1)
+    expect(card).to_contain_text("예약 완료!")
+    expect(card).to_contain_text("결제 완료")
+    expect(card).to_contain_text("KTX 103 서울→부산 09:28~12:35")
+    expect(card).to_contain_text("10호차 1B")
+    expect(card).to_contain_text("16호차 1C")
+    expect(card).to_contain_text("97,200원")
+    expect(card).not_to_contain_text("종료")
+    expect(card.locator("button:has-text('다시 감시')")).to_have_count(0)  # 이미 결제한 건은 다시 감시할 이유가 없다
+    expect(card.locator("button:has-text('목록에서 지우기')")).to_be_visible()
+    expect(page.locator("#rsvSection")).to_be_hidden()  # '결제 필요' 구역에는 올라가지 않는다
+
+
 # ---------------------------------------------------------------- 배너
 def test_notify_failure_banner_opens_settings(open_page):
     page, _ = open_page(state(notify_error="디스코드 전송 실패 (404): Unknown Webhook"))

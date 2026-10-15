@@ -72,8 +72,10 @@ class FakeTrains:
 
 
 class FakeTicket:
-    def __init__(self, pnr_no):
-        self.pnr_no = pnr_no
+    """발권된 승차권 한 장 (좌석 하나). 같은 예약의 승차권은 pnr_no 가 같다."""
+
+    def __init__(self, pnr_no, car_no="10", seat_no="1B", price=48600):
+        self.pnr_no, self.car_no, self.seat_no, self.price = pnr_no, car_no, seat_no, price
 
 
 class FakeTickets:
@@ -315,12 +317,13 @@ def test_job_deleted_while_reserving_cancels_the_orphan(mon):
 
 
 # ---------------------------------------------------------------- 결제 재알림 / 취소
-def test_remind_marks_done_when_reservation_disappears(mon):
+def test_remind_marks_paid_when_reservation_disappears_and_ticket_exists(mon):
     j = add_job(mon)
     mon._try_reserve(j, [FakeTrain("0700", general=True)])
     mon._reminders[j["id"]] = time.time() - m.REMIND_EVERY - 1  # 재알림 주기가 지난 뒤
-    mon._remind([job(mon, j["id"])])  # 코레일 목록에 R1 이 없음 → 결제 완료 또는 만료
-    assert job(mon, j["id"])["status"] == "done"
+    mon.korail.tickets.items = [FakeTicket("R1")]  # 코레일 예약 목록에는 R1 이 없고, 발권 내역에는 있다
+    mon._remind([job(mon, j["id"])])
+    assert job(mon, j["id"])["status"] == "paid"
     assert any("목록에서 사라짐" in entry["msg"] for entry in mon.logs)
 
 
@@ -380,19 +383,55 @@ def _reserved_job(mon, limit_in: timedelta, **job_fields):
     return j
 
 
-def test_gone_before_the_deadline_means_paid(mon):
+def test_paid_reservation_becomes_completed_and_discord_says_so(mon):
+    """결제까지 끝난 건은 '종료'가 아니라 '예약 완료'로 — 열차·좌석·금액과 함께."""
     j = _reserved_job(mon, timedelta(minutes=5))
-    mon._remind([job(mon, j["id"])])  # 코레일 목록에 R1 이 없음
-    assert job(mon, j["id"])["status"] == "done"
-    assert len(mon.sent) == 1 and "결제를 마친" in mon.sent[0]
+    mon.korail.tickets.items = [FakeTicket("R1", "10", "1B", 48600), FakeTicket("R1", "16", "1C", 48600), FakeTicket("OTHER", "3", "9A", 1)]
+    mon._remind([job(mon, j["id"])])
+    r = job(mon, j["id"])
+    assert r["status"] == "paid"
+    assert r["result"]["paid"] == {"seats": ["10호차 1B", "16호차 1C"], "price": 97200}  # 다른 예약의 승차권은 섞이지 않는다
+    assert r["result"]["train"] == "KTX 001 서울→부산 07:00~09:30"  # 예약 때의 정보는 그대로
+    assert len(mon.sent) == 1 and mon.urgent == []  # 확인 알림이라 멘션은 없다
+    msg = mon.sent[0]
+    assert "[KTX 예약 완료]" in msg and "KTX 001" in msg and "10호차 1B" in msg and "16호차 1C" in msg and "97,200원" in msg
+    assert j["id"] not in mon._reminders
 
 
-def test_gone_after_the_deadline_with_a_ticket_means_paid(mon):
+def test_paid_after_the_deadline_is_still_recognized(mon):
     j = _reserved_job(mon, timedelta(minutes=-1))  # 기한 직전에 결제하고 기한 뒤에 확인한 경우
     mon.korail.tickets.items = [FakeTicket("R1")]
     mon._remind([job(mon, j["id"])])
+    assert job(mon, j["id"])["status"] == "paid" and "[KTX 예약 완료]" in mon.sent[0]
+
+
+def test_gone_before_the_deadline_without_a_ticket_keeps_waiting(mon):
+    """결제 직후엔 발권 내역에 반영되기 전일 수 있다 — 기한 안에서는 단정하지 않고 다음 확인 때 다시 본다."""
+    j = _reserved_job(mon, timedelta(minutes=5))
+    mon._remind([job(mon, j["id"])])  # 예약 목록에도 발권 내역에도 없다
+    assert job(mon, j["id"])["status"] == "reserved" and mon.sent == []
+    mon.korail.tickets.items = [FakeTicket("R1")]  # 다음 확인 때 반영됐다
+    mon._reminders[j["id"]] = time.time() - m.REMIND_EVERY - 1
+    mon._remind([job(mon, j["id"])])
+    assert job(mon, j["id"])["status"] == "paid"
+
+
+def test_tickets_unreadable_before_the_deadline_assumes_paid_but_says_so(mon):
+    j = _reserved_job(mon, timedelta(minutes=5))
+    mon.korail.tickets.error = RuntimeError("boom")
+    mon._remind([job(mon, j["id"])])
     assert job(mon, j["id"])["status"] == "done"
-    assert "결제 완료" in mon.sent[0]
+    assert "결제를 마친 것으로 보여요" in mon.sent[0] and "확인하지 못했어요" in mon.sent[0]
+
+
+def test_paid_train_is_not_booked_again_by_another_job(mon):
+    a = _reserved_job(mon, timedelta(minutes=5))
+    mon.korail.tickets.items = [FakeTicket("R1")]
+    mon._remind([job(mon, a["id"])])
+    assert job(mon, a["id"])["status"] == "paid"
+    b = add_job(mon)
+    mon._try_reserve(b, [FakeTrain("0700", general=True)])  # 이미 결제한 바로 그 열차
+    assert len(mon.korail.reservations.created) == 1 and job(mon, b["id"])["status"] == "watching"
 
 
 def test_expired_unpaid_reservation_resumes_watching(mon):
@@ -417,7 +456,7 @@ def test_gone_after_the_deadline_but_tickets_unreadable_does_not_resume(mon):
     mon.korail.tickets.error = RuntimeError("boom")
     mon._remind([job(mon, j["id"])])
     assert job(mon, j["id"])["status"] == "done"  # 결제했을 수도 있으니 불확실하면 다시 잡지 않는다
-    assert "확인하지 못해" in mon.sent[0]
+    assert "확인하지 못해" in mon.sent[0] and "다시 시작하지 않았어요" in mon.sent[0]
     assert any("발권 내역 확인 오류" in e["msg"] for e in mon.logs)
 
 

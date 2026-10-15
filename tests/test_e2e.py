@@ -318,14 +318,18 @@ def test_10_delete_korail_account_returns_to_wizard(page):
 
 
 # ---------------------------------------------------------------- 4. 예약 카드 / 디스코드 웹후크
-def test_11_reserved_card_and_expiry(page, data_dir):
-    limit = datetime.now() + timedelta(minutes=7)
+def _reserved_job(job_id: str, limit: datetime, **over) -> dict:
+    """코레일에는 없는 가짜 예약이 걸린 작업."""
     result = {"rsv_id": "TEST-NONE", "train_key": "x", "train": "KTX 083 서울→부산 07:00~09:40", "price": 59800, "seats": [],
               "buy_limit": limit.strftime("%m/%d %H:%M"), "buy_limit_iso": limit.strftime("%Y-%m-%dT%H:%M:00")}
-    job = {"id": "rsvtest", "dep": "서울", "arr": "부산", "date": limit.strftime("%Y-%m-%d"), "time_from": "06:00", "time_to": "10:00",
-           "option": "GENERAL_FIRST", "train_type": "KTX", "adults": 1, "status": "reserved", "checks": 5, "last_checked": None,
-           "last_checked_ts": time.time(), "result": result}
-    (data_dir / "jobs.json").write_text(json.dumps([job], ensure_ascii=False), encoding="utf-8")
+    return {"id": job_id, "dep": "서울", "arr": "부산", "date": limit.strftime("%Y-%m-%d"), "time_from": "06:00", "time_to": "10:00",
+            "option": "GENERAL_FIRST", "train_type": "KTX", "adults": 1, "status": "reserved", "checks": 5, "last_checked": None,
+            "last_checked_ts": time.time(), "result": result, **over}
+
+
+def test_11_reserved_card_waits_while_the_ticket_is_not_confirmed(page, data_dir):
+    limit = datetime.now() + timedelta(minutes=7)
+    (data_dir / "jobs.json").write_text(json.dumps([_reserved_job("rsvtest", limit)], ensure_ascii=False), encoding="utf-8")
     page.reload()
     sec = page.locator("#rsvSection")
     expect(sec).to_be_visible()
@@ -334,13 +338,22 @@ def test_11_reserved_card_and_expiry(page, data_dir):
     expect(sec.locator(".ring b")).to_have_text(re.compile(r"0[56]:\d\d"), timeout=5000)
     expect(sec.locator("button:has-text('예약 취소')")).to_be_visible()
     shot(page, "11-reserved")
-    # 코레일에 없는 예약이므로 모니터가 '사라짐'으로 정리해야 한다
-    expect(page.locator("#jobs .job").first).to_contain_text("종료", timeout=90000)
-    expect(sec).to_be_hidden()
+    # 코레일 예약 목록에도 발권 내역에도 없지만 결제기한 안이다 — 결제 직후 반영 전일 수 있어 단정하지 않고 '결제 필요'로 둔다
     page.click("#gear")
     page.locator("details.logbox summary").click()
-    expect(page.locator("#logs")).to_contain_text("목록에서 사라짐")
+    expect(page.locator("#logs")).to_contain_text("목록에서 사라짐", timeout=90000)
     page.click("#closeSet")
+    expect(sec).to_be_visible()
+
+
+def test_11b_expired_unpaid_reservation_ends_when_auto_resume_is_used_up(page, data_dir):
+    """기한이 지났고 발권 내역에도 없으면 만료다. 자동 재개 횟수를 다 쓴 작업은 '종료'로 정리된다."""
+    past = datetime.now() - timedelta(minutes=2)
+    job = _reserved_job("rsvtest2", past, resumes=2)
+    (data_dir / "jobs.json").write_text(json.dumps([job], ensure_ascii=False), encoding="utf-8")
+    page.reload()
+    expect(page.locator("#jobs .job").first).to_contain_text("종료", timeout=90000)
+    expect(page.locator("#rsvSection")).to_be_hidden()
 
 
 def test_12_discord_webhook_rejects_bad_input_and_unset_test():

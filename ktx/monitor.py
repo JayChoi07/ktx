@@ -327,7 +327,7 @@ class Monitor:
     def _try_reserve(self, job: dict, trains: list) -> None:
         ymd = job["date"].replace("-", "")
         want_from, want_to = job["time_from"].replace(":", ""), job["time_to"].replace(":", "")
-        taken = {j["result"]["train_key"] for j in self.jobs.all() if j["status"] == "reserved" and j.get("result")}
+        taken = {j["result"]["train_key"] for j in self.jobs.all() if j["status"] in ("reserved", "paid") and j.get("result")}
         for t in trains:
             if t.dep_date != ymd or not (want_from <= t.dep_time[:4] <= want_to):
                 continue
@@ -409,35 +409,48 @@ class Monitor:
         self._reminders.pop(job["id"], None)
         self.notify(text)
 
-    def _reservation_gone(self, job: dict, r: dict) -> None:
-        """예약이 코레일 목록에서 사라졌다. 기한 안이면 결제, 기한 뒤면 발권 내역으로 결제/만료를 가른다.
+    def _paid(self, job: dict, r: dict, tickets: list) -> None:
+        """결제까지 끝나 승차권이 발권됐다 — 카드를 '예약 완료'로 바꾸고 열차·좌석·금액을 알린다."""
+        seats = [f"{t.car_no}호차 {t.seat_no}" for t in tickets]
+        price = sum(t.price for t in tickets) or r.get("price", 0)
+        self.jobs.update(job["id"], status="paid", result={**r, "paid": {"seats": seats, "price": price}})
+        self._reminders.pop(job["id"], None)
+        self.say(f"예약 완료 (결제 확인): {r['train']} {', '.join(seats)}", "ok")
+        self.notify(
+            f"[KTX 예약 완료] {r['train']}\n{job['date']} · {', '.join(seats)} · {price:,}원\n결제까지 확인했어요. 좋은 여행 되세요!"
+        )
 
-        만료로 확정되면 같은 조건으로 감시를 다시 시작한다 (최대 MAX_AUTO_RESUMES 번).
-        기한 직전에 결제하고 기한 뒤에 확인한 경우를 만료로 오인하지 않으려고 승차권 내역을 확인하며,
-        확인하지 못하면 결제했을 수도 있으므로 다시 잡지 않는다.
+    def _reservation_gone(self, job: dict, r: dict) -> None:
+        """예약이 코레일 예약 목록에서 사라졌다. 발권 내역에 같은 예약번호의 승차권이 있으면 결제 완료로 확정한다.
+
+        없으면: 결제기한 안에서는 아직 반영 전일 수 있어 단정하지 않고 다음 확인 때 다시 본다.
+        기한이 지났는데도 없으면 만료로 보고 같은 조건으로 감시를 다시 시작한다 (최대 MAX_AUTO_RESUMES 번).
+        발권 내역을 읽지 못하면 결제했을 수도 있으니 다시 잡지 않는다.
         """
         self.say(f"예약 {r['rsv_id']} 이(가) 목록에서 사라짐")
         limit = r.get("buy_limit_iso")
-        if not (limit and datetime.now() >= datetime.fromisoformat(limit)):
-            self._finish(
-                job,
-                f"[KTX] {r['train']} 예약이 목록에서 사라졌어요. 결제기한 안이라 결제를 마친 것으로 보여요. "
-                "(앱에서 직접 취소했다면 무시하세요)",
-            )
-            return
+        past_deadline = bool(limit and datetime.now() >= datetime.fromisoformat(limit))
         try:
-            paid = any(t.pnr_no == r["rsv_id"] for t in self.korail.tickets.all())
+            tickets = [t for t in self.korail.tickets.all() if t.pnr_no == r["rsv_id"]]
         except Exception as e:
             self.say(f"발권 내역 확인 오류: {e}", "warn")
-            self._finish(
-                job,
-                f"[KTX] {r['train']} 예약이 사라졌지만 결제 여부를 확인하지 못해 감시를 다시 시작하지 않았어요. "
-                "결제하지 않았다면 '다시 감시'를 눌러 주세요.",
-            )
+            if past_deadline:
+                self._finish(
+                    job,
+                    f"[KTX] {r['train']} 예약이 사라졌지만 결제 여부를 확인하지 못해 감시를 다시 시작하지 않았어요. "
+                    "결제하지 않았다면 '다시 감시'를 눌러 주세요.",
+                )
+            else:
+                self._finish(
+                    job,
+                    f"[KTX] {r['train']} 예약이 사라졌어요. 결제기한 안이라 결제를 마친 것으로 보여요. (발권 내역은 확인하지 못했어요)",
+                )
             return
-        if paid:
-            self._finish(job, f"[KTX] {r['train']} 결제 완료를 확인했어요.")
+        if tickets:
+            self._paid(job, r, tickets)
             return
+        if not past_deadline:
+            return  # 결제 직후라 발권 내역에 반영되기 전일 수 있다 — 다음 확인 때 다시 본다
         resumes = job.get("resumes", 0)
         if resumes >= MAX_AUTO_RESUMES:
             self._finish(

@@ -114,7 +114,8 @@
   .tr.have { background:var(--ok-bg); color:var(--ok); }
   .actions { display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap; }
   .job.reserved { background: linear-gradient(180deg, #fffaf0, #fff); border: 2px solid #ffd58a; }
-  .job.reserved .big { font-size:16px; font-weight:700; margin-top:10px; }
+  .job.reserved .big, .job.paid .big { font-size:16px; font-weight:700; margin-top:10px; }
+  .job.paid { border: 2px solid var(--ok-bg); }
   .countdown { display:flex; align-items:center; gap:14px; }
   .ring { width:84px; height:84px; position:relative; flex:none; }
   .ring svg { transform: rotate(-90deg); width:84px; height:84px; }
@@ -233,7 +234,7 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const store = { get(k){ try { return localStorage.getItem(k); } catch { return null; } }, set(k,v){ try { localStorage.setItem(k,v); } catch {} } };
-const STATUS = { watching:['감시 중','pri'], reserved:['결제 필요','warn'], done:['종료',''], stopped:['중지됨',''], expired:['기간 만료',''] };
+const STATUS = { watching:['감시 중','pri'], reserved:['결제 필요','warn'], paid:['예약 완료','ok'], done:['종료',''], stopped:['중지됨',''], expired:['기간 만료',''] };
 const ROUTES = [['서울','부산'],['부산','서울'],['서울','대전']];
 const TIMES = [['아침','06:00','10:00'],['낮','10:00','16:00'],['저녁','16:00','23:59'],['종일','00:00','23:59']];
 const POPULAR = ['서울','용산','광명','수원','천안아산','오송','대전','김천구미','동대구','신경주','울산(통도사)','부산','광주송정','목포','강릉','여수EXPO'];
@@ -454,6 +455,13 @@ function jobHtml(j) {
       <div class="actions" style="margin-top:14px"><button class="btn danger small" data-act="cancel" data-id="${j.id}">예약 취소</button><button class="btn sub small" data-act="del" data-id="${j.id}">목록에서 지우기</button></div></div>
       <div class="countdown" data-iso="${esc(r.buy_limit_iso || '')}"><div class="ring"><svg viewBox="0 0 84 84"><circle class="bg" cx="42" cy="42" r="36"/><circle class="fg" cx="42" cy="42" r="36" stroke-dasharray="226.2" stroke-dashoffset="0"/></svg><b>--:--</b></div><span class="t-small">결제까지<br>남은 시간</span></div>`;
   }
+  if (j.status === 'paid' && r) {  // 결제까지 확인된 건: 열차·좌석·금액을 보여준다
+    const p = r.paid || {};
+    const parts = [shortDate(j.date), ...(p.seats || []), `${(p.price ?? r.price).toLocaleString()}원`];
+    return `<div><div class="route-line"><svg class="check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></svg>예약 완료! ${esc(j.dep)} → ${esc(j.arr)} <span class="badge ok"><span class="dot"></span>결제 완료</span></div>
+      <div class="big">${esc(r.train)}</div><div class="meta">${parts.map(x => `<span class="nw">${esc(x)}</span>`).join(' · ')}</div></div>
+      <div class="actions"><button class="btn sub small" data-act="del" data-id="${j.id}">목록에서 지우기</button></div>`;
+  }
   const btns = [
     j.status === 'watching' ? `<button class="btn sub small" data-act="stop" data-id="${j.id}">중지</button>` : '',
     ['stopped','expired','done'].includes(j.status) ? `<button class="btn sub small" data-act="resume" data-id="${j.id}">다시 감시</button>` : '',
@@ -471,7 +479,7 @@ function syncList(jobs, listEl, emptyHtml) {
     if (!c) { c = { el: document.createElement('div'), sig: '' }; cards.set(j.id, c); }
     if (c.sig !== sig) {
       const first = !c.sig;
-      c.el.className = `job ${j.status === 'reserved' ? 'reserved' : ''} ${first ? 'enter' : ''}`;
+      c.el.className = `job ${['reserved', 'paid'].includes(j.status) ? j.status : ''} ${first ? 'enter' : ''}`;
       if (first) c.el.style.setProperty('--i', i++);
       c.el.innerHTML = jobHtml(j); c.sig = sig;
     } else {
