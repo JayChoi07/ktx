@@ -72,6 +72,22 @@ class Jobs:
                     return j
             return None
 
+    def transition(self, job_id: str, rsv_id: str, **fields: Any) -> dict | None:
+        """작업이 아직 같은 예약(reserved, rsv_id 일치)일 때만 갱신한다. 아니면 None.
+
+        코레일을 조회하는 동안 사용자가 중지·취소·삭제했을 수 있다. 조회 전의 낡은 스냅샷으로 update() 하면 그 선택을 덮어쓴다.
+        """
+        with _lock:
+            jobs = self.all()
+            for j in jobs:
+                if j["id"] == job_id:
+                    if j["status"] != "reserved" or (j.get("result") or {}).get("rsv_id") != rsv_id:
+                        return None
+                    j.update(fields)
+                    save(self.FILE, jobs)
+                    return j
+            return None
+
     def remove(self, job_id: str) -> None:
         with _lock:
             save(self.FILE, [j for j in self.all() if j["id"] != job_id])

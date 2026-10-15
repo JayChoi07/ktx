@@ -30,6 +30,31 @@ def _open_browser(*_) -> None:
         webbrowser.open(URL)
 
 
+class _LogStream:
+    """콘솔이 없을 때 stdout/stderr 대신 쓰는, 로깅으로 흘려보내는 스트림.
+
+    같은 파일을 따로 열어 두면 Windows 에서는 RotatingFileHandler 가 이름을 바꾸지 못해(WinError 32) 회전이 막히고 파일이 계속 커진다.
+    """
+
+    def __init__(self, level: int) -> None:
+        self._log, self._level, self._busy = logging.getLogger("ktx.stdio"), level, False
+
+    def write(self, text: str) -> int:
+        if text.strip() and not self._busy:  # 로깅 자체의 오류 출력이 다시 여기로 들어오는 순환을 막는다
+            self._busy = True
+            try:
+                self._log.log(self._level, text.rstrip())
+            finally:
+                self._busy = False
+        return len(text)
+
+    def flush(self) -> None:
+        pass
+
+    def isatty(self) -> bool:
+        return False
+
+
 def _setup_file_logging() -> None:
     """콘솔이 없는 모드: stdout/stderr 가 None 이라 로그를 파일로 보낸다."""
     from ktx import store
@@ -41,9 +66,9 @@ def _setup_file_logging() -> None:
     logging.basicConfig(level=logging.WARNING, handlers=[handler], force=True)
     logging.getLogger("ktx").setLevel(logging.INFO)  # 로그인·예약 같은 감시 이력도 남긴다 (다른 라이브러리는 WARNING 이상만)
     if sys.stdout is None:
-        sys.stdout = open(log, "a", encoding="utf-8", buffering=1)  # noqa: SIM115 — 프로세스 수명 동안 유지
+        sys.stdout = _LogStream(logging.INFO)
     if sys.stderr is None:
-        sys.stderr = sys.stdout
+        sys.stderr = _LogStream(logging.WARNING)
 
 
 def _tray_icon():

@@ -8,7 +8,7 @@ import random
 import threading
 import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pykorail import AdultPassenger, Korail
 from pykorail.device import DeviceProfile, random_profile
@@ -35,6 +35,7 @@ BLOCK_REPEAT = 3600  # 접속 제한이 이어질 때 "아직 막혀 있다"를 
 REMIND_EVERY = 120  # 결제 재알림 간격(초)
 MAX_SEARCH_PAGES = 10  # 한 번의 조회에서 이어 받는 최대 쪽 수 (쪽마다 요청이 한 번 나간다)
 MAX_AUTO_RESUMES = 2  # 결제기한 만료 뒤 감시를 자동으로 다시 시작하는 최대 횟수
+EXPIRY_GRACE = 300  # 결제기한이 지나도 발권 내역에 없을 때 만료로 단정하기 전에 더 기다리는 시간(초) — 막판 결제의 반영 지연 대비
 # *_FIRST 는 선호하는 쪽이 없으면 다른 쪽 좌석이라도 잡는다 ("전부"). *_ONLY 는 그 등급만.
 OPTIONS = {
     "GENERAL_FIRST": "전부 (일반실 먼저)",
@@ -313,7 +314,7 @@ class Monitor:
                 break
             found.update(fresh)
             last = page[-1]
-            if last.dep_date != ymd or last.dep_time[:4] >= until:
+            if last.dep_date != ymd or last.dep_time[:4] > until:  # 같은 분(= until)의 다른 열차가 다음 쪽에 있을 수 있어 초과해야 멈춘다
                 break
             following = datetime.strptime(last.dep_date + last.dep_time[:4], "%Y%m%d%H%M")
             if following <= cursor:
@@ -396,6 +397,9 @@ class Monitor:
                 continue
             try:
                 still = self.korail.reservations.find(r["rsv_id"])
+            except AccessRestrictedError as e:
+                self._blocked(e)  # 접속 제한이면 감시 전체를 멈추고 이번 확인은 접는다
+                return
             except Exception as e:
                 self.say(f"예약 확인 오류: {e}", "warn")
                 continue
@@ -405,7 +409,8 @@ class Monitor:
                 self.notify(f"[KTX 결제 대기] {r['train']}\n결제기한 {r['buy_limit']}")
 
     def _finish(self, job: dict, text: str) -> None:
-        self.jobs.update(job["id"], status="done")
+        if self.jobs.transition(job["id"], job["result"]["rsv_id"], status="done") is None:
+            return  # 확인하는 사이 사용자가 중지·취소·삭제했다 — 그 선택을 덮어쓰지 않는다
         self._reminders.pop(job["id"], None)
         self.notify(text)
 
@@ -413,7 +418,8 @@ class Monitor:
         """결제까지 끝나 승차권이 발권됐다 — 카드를 '예약 완료'로 바꾸고 열차·좌석·금액을 알린다."""
         seats = [f"{t.car_no}호차 {t.seat_no}" for t in tickets]
         price = sum(t.price for t in tickets) or r.get("price", 0)
-        self.jobs.update(job["id"], status="paid", result={**r, "paid": {"seats": seats, "price": price}})
+        if self.jobs.transition(job["id"], r["rsv_id"], status="paid", result={**r, "paid": {"seats": seats, "price": price}}) is None:
+            return
         self._reminders.pop(job["id"], None)
         self.say(f"예약 완료 (결제 확인): {r['train']} {', '.join(seats)}", "ok")
         self.notify(
@@ -424,14 +430,19 @@ class Monitor:
         """예약이 코레일 예약 목록에서 사라졌다. 발권 내역에 같은 예약번호의 승차권이 있으면 결제 완료로 확정한다.
 
         없으면: 결제기한 안에서는 아직 반영 전일 수 있어 단정하지 않고 다음 확인 때 다시 본다.
-        기한이 지났는데도 없으면 만료로 보고 같은 조건으로 감시를 다시 시작한다 (최대 MAX_AUTO_RESUMES 번).
-        발권 내역을 읽지 못하면 결제했을 수도 있으니 다시 잡지 않는다.
+        기한이 지나도 EXPIRY_GRACE 동안은 더 기다린다 (막판 결제의 반영 지연을 만료로 오판해 두 번째 예약을 만들지 않으려고).
+        그래도 없으면 만료로 보고 같은 조건으로 감시를 다시 시작한다 (최대 MAX_AUTO_RESUMES 번).
+        발권 내역을 읽지 못하면 결제했을 수도 있으니 다시 잡지 않고, 접속 제한이면 감시를 멈추고 나중에 다시 확인한다.
         """
         self.say(f"예약 {r['rsv_id']} 이(가) 목록에서 사라짐")
-        limit = r.get("buy_limit_iso")
-        past_deadline = bool(limit and datetime.now() >= datetime.fromisoformat(limit))
+        limit = datetime.fromisoformat(r["buy_limit_iso"]) if r.get("buy_limit_iso") else None
+        past_deadline = bool(limit and datetime.now() >= limit)
+        expired = bool(limit and datetime.now() >= limit + timedelta(seconds=EXPIRY_GRACE))
         try:
             tickets = [t for t in self.korail.tickets.all() if t.pnr_no == r["rsv_id"]]
+        except AccessRestrictedError as e:
+            self._blocked(e)
+            return
         except Exception as e:
             self.say(f"발권 내역 확인 오류: {e}", "warn")
             if past_deadline:
@@ -449,7 +460,7 @@ class Monitor:
         if tickets:
             self._paid(job, r, tickets)
             return
-        if not past_deadline:
+        if not expired:
             return  # 결제 직후라 발권 내역에 반영되기 전일 수 있다 — 다음 확인 때 다시 본다
         resumes = job.get("resumes", 0)
         if resumes >= MAX_AUTO_RESUMES:
@@ -459,7 +470,8 @@ class Monitor:
                 "계속하려면 '다시 감시'를 눌러 주세요.",
             )
             return
-        self.jobs.update(job["id"], status="watching", result=None, resumes=resumes + 1)
+        if self.jobs.transition(job["id"], r["rsv_id"], status="watching", result=None, resumes=resumes + 1) is None:
+            return  # 확인하는 사이 사용자가 중지·취소·삭제했다
         self._reminders.pop(job["id"], None)
         self.say(f"결제기한이 지나 만료 — 감시를 다시 시작합니다 ({resumes + 1}/{MAX_AUTO_RESUMES})", "warn")
         self.notify(

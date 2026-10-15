@@ -93,8 +93,8 @@ class FakeTickets:
 class PagedTrains:
     """depart_after 이후 열차를 10편씩 돌려주는 가짜 시간표. 경계 열차가 다음 쪽에 또 나오는 것도 실제 pykorail 과 같다."""
 
-    def __init__(self, minutes):
-        self.all = [FakeTrain(f"{m // 60:02d}{m % 60:02d}", no=f"{i:03d}") for i, m in enumerate(minutes)]
+    def __init__(self, minutes, seats=()):
+        self.all = [FakeTrain(f"{m // 60:02d}{m % 60:02d}", no=f"{i:03d}", general=i in seats) for i, m in enumerate(minutes)]
         self.calls = []
 
     def search(self, dep, arr, depart_after=None, max_pages=1, **kw):
@@ -284,6 +284,16 @@ def test_search_page_count_is_capped(mon):
     assert len(mon.korail.trains.calls) == m.MAX_SEARCH_PAGES
 
 
+def test_search_does_not_stop_on_a_page_boundary_inside_the_end_minute(mon):
+    """창 끝과 같은 분에 출발하는 열차가 둘이고 그 사이에서 쪽이 갈리면, 뒤 열차를 놓치던 버그 (astra 리뷰)."""
+    early = [7 * 60 + 10 * k for k in range(9)]  # 07:00 ~ 08:20, 9편
+    mon.korail.trains = PagedTrains(early + [9 * 60, 9 * 60, 9 * 60 + 30], seats={10})  # 09:00 에 두 편, 뒤쪽만 자리 있음
+    j = add_job(mon, time_from="07:00", time_to="09:00")
+    mon._check_group("서울", "부산", TOMORROW, "KTX", [j])
+    assert [t["t"] for t in job(mon, j["id"])["trains"]].count("09:00") == 2
+    assert mon.korail.reservations.created and mon.korail.reservations.created[0][0].train_no == "010"
+
+
 def test_search_covers_the_latest_job_in_the_group(mon):
     """같은 노선·날짜의 감시는 한 번에 조회한다 — 가장 늦은 시간대까지 받아야 한다."""
     mon.korail.trains = PagedTrains(_every_20_min())
@@ -434,9 +444,25 @@ def test_paid_train_is_not_booked_again_by_another_job(mon):
     assert len(mon.korail.reservations.created) == 1 and job(mon, b["id"])["status"] == "watching"
 
 
+EXPIRED = timedelta(seconds=-(m.EXPIRY_GRACE + 60))  # 결제기한 + 유예가 지난 뒤
+
+
+def test_ticket_lag_just_past_the_deadline_does_not_resume_or_rebook(mon):
+    """기한 직전에 결제했는데 발권 내역 반영이 기한을 조금 넘기는 경우 — 만료로 오판해 두 번째 예약을 만들면 안 된다 (astra 리뷰)."""
+    j = _reserved_job(mon, timedelta(minutes=-1))
+    mon._remind([job(mon, j["id"])])  # 기한은 지났지만 유예 안이고 아직 승차권이 안 보인다
+    r = job(mon, j["id"])
+    assert r["status"] == "reserved" and r["result"]["rsv_id"] == "R1" and mon.sent == []
+    mon.korail.tickets.items = [FakeTicket("R1")]  # 곧 반영됐다
+    mon._reminders[j["id"]] = time.time() - m.REMIND_EVERY - 1
+    mon._remind([job(mon, j["id"])])
+    assert job(mon, j["id"])["status"] == "paid"
+    assert len(mon.korail.reservations.created) == 1  # 재예약은 없었다
+
+
 def test_expired_unpaid_reservation_resumes_watching(mon):
-    j = _reserved_job(mon, timedelta(minutes=-3))
-    mon._remind([job(mon, j["id"])])  # 기한이 지났고 발권된 승차권도 없다 → 만료
+    j = _reserved_job(mon, EXPIRED)
+    mon._remind([job(mon, j["id"])])  # 기한+유예가 지났고 발권된 승차권도 없다 → 만료
     r = job(mon, j["id"])
     assert r["status"] == "watching" and r["result"] is None and r["resumes"] == 1
     assert len(mon.sent) == 1 and "만료" in mon.sent[0] and "다시 시작" in mon.sent[0]
@@ -445,7 +471,7 @@ def test_expired_unpaid_reservation_resumes_watching(mon):
 
 def test_auto_resume_is_capped(mon):
     """결제할 생각이 없는 사용자에게 같은 열차를 무한히 다시 잡아 울리지 않는다."""
-    j = _reserved_job(mon, timedelta(minutes=-3), resumes=m.MAX_AUTO_RESUMES)
+    j = _reserved_job(mon, EXPIRED, resumes=m.MAX_AUTO_RESUMES)
     mon._remind([job(mon, j["id"])])
     assert job(mon, j["id"])["status"] == "done"
     assert "감시를 종료" in mon.sent[0]
@@ -458,6 +484,54 @@ def test_gone_after_the_deadline_but_tickets_unreadable_does_not_resume(mon):
     assert job(mon, j["id"])["status"] == "done"  # 결제했을 수도 있으니 불확실하면 다시 잡지 않는다
     assert "확인하지 못해" in mon.sent[0] and "다시 시작하지 않았어요" in mon.sent[0]
     assert any("발권 내역 확인 오류" in e["msg"] for e in mon.logs)
+
+
+def test_user_action_during_the_ticket_check_is_not_overwritten(mon):
+    """발권 내역을 조회하는 사이 사용자가 중지·취소했다면, 낡은 스냅샷으로 '감시 재개'를 덮어쓰지 않는다 (astra 리뷰)."""
+    j = _reserved_job(mon, EXPIRED)
+    snapshot = job(mon, j["id"])
+
+    def user_cancels_meanwhile():
+        mon.jobs.update(j["id"], status="stopped")
+        return []
+
+    mon.korail.tickets.all = user_cancels_meanwhile
+    mon._remind([snapshot])
+    assert job(mon, j["id"])["status"] == "stopped" and mon.sent == []
+
+
+def test_paid_confirmation_does_not_overwrite_a_stopped_job(mon):
+    j = _reserved_job(mon, timedelta(minutes=5))
+    snapshot = job(mon, j["id"])
+
+    def user_stops_meanwhile():
+        mon.jobs.update(j["id"], status="stopped")
+        return [FakeTicket("R1")]
+
+    mon.korail.tickets.all = user_stops_meanwhile
+    mon._remind([snapshot])
+    assert job(mon, j["id"])["status"] == "stopped"
+
+
+def test_access_restriction_while_reading_tickets_pauses_instead_of_giving_up(mon):
+    """발권 내역 조회에서 접속 제한이 걸리면 일반 오류처럼 작업을 끝내지 말고 감시를 멈춰야 한다 (astra 리뷰)."""
+    j = _reserved_job(mon, EXPIRED)
+    mon.korail.tickets.error = AccessRestrictedError(403, "이용제한", "-2000")
+    mon._remind([job(mon, j["id"])])
+    assert mon.paused_until > time.time() + 500
+    assert job(mon, j["id"])["status"] == "reserved"  # 나중에 다시 확인한다
+    assert any("접속 제한" in t for t in mon.sent)
+
+
+def test_access_restriction_while_checking_the_reservation_pauses_too(mon):
+    j = _reserved_job(mon, timedelta(minutes=5))
+
+    def blocked(rsv_id):
+        raise AccessRestrictedError(403, "이용제한", "-2000")
+
+    mon.korail.reservations.find = blocked
+    mon._remind([job(mon, j["id"])])
+    assert mon.paused_until > time.time() + 500 and job(mon, j["id"])["status"] == "reserved"
 
 
 def test_cancel_reservation(mon):
@@ -587,6 +661,19 @@ def test_jobs_store_roundtrip(tmp_path, monkeypatch):
     assert jobs.update("nope", status="x") is None
     jobs.remove(j["id"])
     assert jobs.all() == []
+
+
+def test_transition_only_applies_to_the_same_reserved_booking(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DATA_DIR", tmp_path)
+    jobs = store.Jobs()
+    j = jobs.add({"dep": "서울", "arr": "부산"})
+    assert jobs.transition(j["id"], "R1", status="done") is None  # 아직 reserved 가 아니다
+    jobs.update(j["id"], status="reserved", result={"rsv_id": "R1"})
+    assert jobs.transition(j["id"], "OTHER", status="done") is None  # 다른 예약번호
+    assert jobs.all()[0]["status"] == "reserved"
+    assert jobs.transition(j["id"], "R1", status="done")["status"] == "done"
+    assert jobs.transition(j["id"], "R1", status="watching") is None  # 이미 끝난 건 되살리지 않는다
+    assert jobs.transition("nope", "R1", status="done") is None
 
 
 def test_interval_limits(mon):

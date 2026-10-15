@@ -348,7 +348,7 @@ def test_11_reserved_card_waits_while_the_ticket_is_not_confirmed(page, data_dir
 
 def test_11b_expired_unpaid_reservation_ends_when_auto_resume_is_used_up(page, data_dir):
     """기한이 지났고 발권 내역에도 없으면 만료다. 자동 재개 횟수를 다 쓴 작업은 '종료'로 정리된다."""
-    past = datetime.now() - timedelta(minutes=2)
+    past = datetime.now() - timedelta(minutes=7)  # 결제기한 + 유예(5분)가 지난 뒤
     job = _reserved_job("rsvtest2", past, resumes=2)
     (data_dir / "jobs.json").write_text(json.dumps([job], ensure_ascii=False), encoding="utf-8")
     page.reload()

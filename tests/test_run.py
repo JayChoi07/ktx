@@ -24,6 +24,35 @@ print(type(logging.getLogger().handlers[0]).__name__)
 """
 
 
+NO_CONSOLE_SCRIPT = """
+import logging, sys
+
+real = sys.stdout
+sys.stdout = sys.stderr = None  # 콘솔 없는 exe(console=False) 와 같은 상태
+import run
+
+run._setup_file_logging()
+print("stdout 한 줄")
+sys.stderr.write("stderr 한 줄\\n")
+for _ in range(1500):
+    logging.getLogger("ktx").info("x" * 1000)  # 1MB 를 넘겨 회전을 일으킨다
+real.write("done\\n")
+"""
+
+
+def test_rotation_works_without_a_console_and_stdout_ends_up_in_the_log(tmp_path):
+    """stdout/stderr 용으로 같은 파일을 따로 열면 Windows 에서 이름 변경(회전)이 PermissionError 로 막혀 파일이 계속 커진다 (astra 리뷰)."""
+    env = {**os.environ, "KTX_DATA_DIR": str(tmp_path), "PYTHONUTF8": "1"}
+    out = subprocess.run([sys.executable, "-c", NO_CONSOLE_SCRIPT], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0 and out.stdout.strip() == "done", out.stderr
+    files = sorted(tmp_path.glob("ktx.log*"))
+    assert [f.name for f in files][:2] == ["ktx.log", "ktx.log.1"]  # 실제로 회전됐다
+    assert max(f.stat().st_size for f in files) < 1_300_000  # 한없이 커지지 않는다
+    text = "".join(f.read_text(encoding="utf-8") for f in files)
+    assert "stdout 한 줄" in text and "stderr 한 줄" in text  # 콘솔이 없어도 print/예외 출력이 로그에 남는다
+    assert "PermissionError" not in text
+
+
 def test_exe_mode_logs_ktx_history_to_a_size_limited_file(tmp_path):
     env = {**os.environ, "KTX_DATA_DIR": str(tmp_path), "PYTHONUTF8": "1"}
     out = subprocess.run([sys.executable, "-c", SCRIPT], cwd=ROOT, env=env, capture_output=True, text=True, timeout=60, check=True)
