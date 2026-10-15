@@ -195,6 +195,9 @@ def helper_script(
     - sha256 이 주어지면 교체 직전에 ktx-new.exe 를 다시 검증한다. 다르면 지우고 교체하지 않은 채 옛 exe 를 다시 띄운다.
     - 막 끝난 프로세스의 exe 는 백신 검사 등으로 잠시 잠겨 있을 수 있어 이름 변경을 0.5초 간격으로 retries 번까지 다시 시도한다.
       끝내 못 바꾸면 옛 exe 를 그대로 둔다. 이동이 중간에 실패하면 옛 exe 를 되돌린다. 어떤 경우에도 마지막에 (새 또는 옛) exe 를 띄운다.
+
+    cmdlet 대신 .NET 클래스만 쓴다. powershell.exe 는 부모의 PSModulePath 등을 물려받는데, PowerShell 7 이 깔린 환경(GitHub 러너 등)에서는
+    모듈 cmdlet(Get-FileHash 등)이 "인식되지 않는다"며 사라져 해시 확인이 실패하고 업데이트가 조용히 포기되는 일이 실제로 있었다.
     """
     if sha256 is not None and not re.fullmatch(r"[0-9a-fA-F]{64}", sha256):
         raise ValueError("sha256 형식이 올바르지 않아요")
@@ -202,26 +205,31 @@ def helper_script(
         f"$exe = {_data(exe)}",
         f"$new = {_data(new)}",
         f"$old = {_data(old)}",
-        f"$p = Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue",
+        "try { $p = [System.Diagnostics.Process]::GetProcessById(" + str(int(pid)) + ") } catch { $p = $null }",
         f"if ($p) {{ $null = $p.WaitForExit({int(wait) * 1000}); "
         "if (-not $p.HasExited) { Write-Output 'old process still running'; exit 1 } }",
-        "Start-Sleep -Seconds 1",
+        "[System.Threading.Thread]::Sleep(1000)",
         "$swap = $true",
     ]
     if sha256:
         lines += [
-            "try { $h = (Get-FileHash -LiteralPath $new -Algorithm SHA256 -ErrorAction Stop).Hash } "
-            "catch { $h = ''; Write-Output \"hash error: $($_.Exception.Message)\" }",
+            "try {",
+            "  $s = [System.IO.File]::OpenRead($new)",
+            "  try {",
+            "    $sha = [System.Security.Cryptography.SHA256]::Create()",
+            "    $h = [System.BitConverter]::ToString($sha.ComputeHash($s)).Replace('-', '')",
+            "  } finally { $s.Dispose() }",
+            "} catch { $h = ''; Write-Output \"hash error: $($_.Exception.Message)\" }",
             f"if ($h -ne '{sha256.upper()}') {{ Write-Output \"hash mismatch: got '$h'\"; $swap = $false; "
-            "Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue }",
+            "try { [System.IO.File]::Delete($new) } catch { } }",
         ]
     lines += [
         "function Try-Move($from, $to) {",
         # 재시도는 잠금용이다 — 없는 파일은 바로 포기
-        "  if (-not (Test-Path -LiteralPath $from)) { $script:why = 'missing: ' + $from; return $false }",
+        "  if (-not [System.IO.File]::Exists($from)) { $script:why = 'missing: ' + $from; return $false }",
         f"  for ($i = 0; $i -lt {int(retries)}; $i++) {{",
-        "    try { Move-Item -LiteralPath $from -Destination $to -Force -ErrorAction Stop; return $true }",
-        "    catch { $script:why = $_.Exception.Message; Start-Sleep -Milliseconds 500 }",
+        "    try { [System.IO.File]::Delete($to); [System.IO.File]::Move($from, $to); return $true }",
+        "    catch { $script:why = $_.Exception.Message; [System.Threading.Thread]::Sleep(500) }",
         "  }",
         "  return $false",
         "}",
@@ -229,13 +237,19 @@ def helper_script(
         "  if (Try-Move $exe $old) {",
         "    if (-not (Try-Move $new $exe)) {",
         "      Write-Output \"swap failed: $script:why\"",
-        "      if (-not (Test-Path -LiteralPath $exe)) { $null = Try-Move $old $exe }",
+        "      if (-not [System.IO.File]::Exists($exe)) { $null = Try-Move $old $exe }",
         "    }",
         "  } else { Write-Output \"old exe stayed locked: $script:why\" }",
         "}",
     ]
     if start:  # --updated: 새 exe 가 브라우저 탭을 또 열지 않게 한다
-        lines.append("Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) -ArgumentList '--updated'")
+        lines += [
+            "$psi = [System.Diagnostics.ProcessStartInfo]::new($exe)",
+            "$psi.WorkingDirectory = [System.IO.Path]::GetDirectoryName($exe)",
+            "$psi.Arguments = '--updated'",
+            "$psi.UseShellExecute = $false",
+            "$null = [System.Diagnostics.Process]::Start($psi)",
+        ]
     return "\n".join(lines)
 
 

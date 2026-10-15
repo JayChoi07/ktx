@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 import shutil
 import subprocess
 import sys
@@ -441,9 +442,11 @@ def test_helper_script_passes_paths_as_data_not_as_script_syntax(tmp_path):
     s = update.helper_script(4242, exe, exe.with_name("ktx-new.exe"), exe.with_name("ktx.old"), sha256="AB" * 32)
     assert str(exe) not in s and "O’Brien" not in s and "it's" not in s
     assert base64.b64encode(str(exe).encode("utf-8")).decode() in s
-    assert "Get-FileHash" in s and "AB" * 32 in s  # 교체 직전에 파일을 한 번 더 검증한다
-    assert "--updated" in s and "Start-Process" in s
-    assert "Start-Process" not in update.helper_script(4242, exe, exe.with_name("ktx-new.exe"), exe.with_name("ktx.old"), start=False)
+    assert "SHA256" in s and "AB" * 32 in s  # 교체 직전에 파일을 한 번 더 검증한다
+    assert "--updated" in s and "Process]::Start" in s
+    assert "Process]::Start" not in update.helper_script(4242, exe, exe.with_name("ktx-new.exe"), exe.with_name("ktx.old"), start=False)
+    # 모듈 cmdlet 에 기대지 않는다: CI 의 powershell.exe 에서 Get-FileHash 가 인식되지 않아 해시 확인이 실패하고 업데이트가 조용히 포기됐다
+    assert not re.search(r"\b(Get|Set|New|Move|Remove|Start|Test|Split|Copy)-[A-Z]\w+", s)
 
 
 def run_helper(script: str) -> int:
