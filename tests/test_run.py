@@ -24,26 +24,39 @@ print(type(logging.getLogger().handlers[0]).__name__)
 """
 
 
-def test_leftovers_of_a_previous_update_are_removed_next_to_the_exe(tmp_path, monkeypatch):
-    """새 exe 가 첫 실행에 ktx.old 등을 지운다 — 새 exe 가 뜨지 못했다면 ktx.old 가 남아 있어 복구할 수 있다."""
+def test_stale_downloads_go_at_startup_but_the_old_exe_is_kept(tmp_path, monkeypatch):
+    """시작하는 순간엔 진행 중인 설치가 있을 수 없어 받다 만 파일은 바로 지운다. 복구용 ktx.old 는 건드리지 않는다."""
     import run
 
     exe = tmp_path / "ktx.exe"
     for name in ("ktx.exe", "ktx.old", "ktx-new.exe", "ktx-new.exe.part", "keep-me.txt"):
         (tmp_path / name).write_bytes(b"x")
-    run._cleanup_update_leftovers(exe)
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["keep-me.txt", "ktx.exe"]
-    run._cleanup_update_leftovers(exe)  # 이미 없어도 에러 없이 지나간다
-    (tmp_path / "ktx.old").write_bytes(b"x")
-    real_unlink = type(exe).unlink
+    run._remove_stale_downloads(exe)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["keep-me.txt", "ktx.exe", "ktx.old"]
+    run._remove_stale_downloads(exe)  # 이미 없어도 에러 없이 지나간다
 
     def locked(self, *a, **k):
         raise PermissionError(13, "in use")
 
+    (tmp_path / "ktx-new.exe").write_bytes(b"x")
     monkeypatch.setattr(type(exe), "unlink", locked)
-    run._cleanup_update_leftovers(exe)  # 아직 잠겨 있어도 시작을 막지 않는다
-    monkeypatch.setattr(type(exe), "unlink", real_unlink)
-    assert (tmp_path / "ktx.old").exists()
+    run._remove_stale_downloads(exe)  # 잠겨 있어도 시작을 막지 않는다
+
+
+def test_old_exe_is_removed_only_once_the_new_one_is_actually_serving(tmp_path, monkeypatch):
+    """시작에 실패해 오류 상자가 떠 있는 동안 복구용 ktx.old 를 지우면 안 된다 (astra 리뷰)."""
+    import run
+
+    exe = tmp_path / "ktx.exe"
+    old = tmp_path / "ktx.old"
+    old.write_bytes(b"x")
+    monkeypatch.setattr(run, "_already_running", lambda: False)  # 서버가 안 떴다
+    run._remove_old_exe_when_serving(exe)
+    assert old.exists()
+    monkeypatch.setattr(run, "_already_running", lambda: True)  # 서버가 응답한다
+    run._remove_old_exe_when_serving(exe)
+    assert not old.exists()
+    run._remove_old_exe_when_serving(exe)  # 이미 없어도 에러 없이 지나간다
 
 
 def test_updated_restart_does_not_open_another_browser_tab():

@@ -139,18 +139,26 @@ def test_state_exposes_install_progress(upd, monkeypatch):
     assert upd.get("/api/state").json()["update_install"] == {"phase": "downloading", "done": 10, "total": 100, "error": None}
 
 
-def test_install_endpoint_starts_the_install_with_an_exit_hook(upd, monkeypatch):
+def test_install_endpoint_starts_the_install_with_an_exit_hook_and_the_booking_gate(upd, monkeypatch):
     started = []
-    monkeypatch.setattr(upd.mod.update, "start_install", lambda exit_cb: started.append(exit_cb) or True)
+    monkeypatch.setattr(upd.mod.update, "start_install", lambda cb, hold=None, release=None: started.append((cb, hold, release)) or True)
     assert upd.post("/api/update/install").json() == {"ok": True}
+    exit_cb, hold, release = started[0]
+    assert hold == upd.mod.monitor.hold_for_restart and release == upd.mod.monitor.release_restart  # 교체 직전 예약 게이트 (astra 리뷰)
     exited = []
     monkeypatch.setattr(upd.mod, "exit_app", lambda: exited.append(1))  # run.py 가 나중에 바꿔 끼운 종료 함수도 따라간다
-    started[0]()
+    exit_cb()
     assert exited == [1]
 
 
+def test_state_carries_a_per_process_boot_id(api):
+    """화면이 서버가 재시작됐는지 알아채는 기준 — 끊김을 못 봐도 새 프로세스면 다른 값이다 (astra 리뷰)."""
+    a, b = api.get("/api/state").json()["boot"], api.get("/api/state").json()["boot"]
+    assert a == b and len(a) >= 16
+
+
 def test_install_endpoint_rejects_what_it_cannot_do(upd, monkeypatch):
-    monkeypatch.setattr(upd.mod.update, "start_install", lambda exit_cb: False)
+    monkeypatch.setattr(upd.mod.update, "start_install", lambda exit_cb, hold=None, release=None: False)
     r = upd.post("/api/update/install")
     assert r.status_code == 409 and "진행 중" in r.json()["detail"]
     monkeypatch.setattr(upd.mod.update, "can_install", lambda: (False, "이 릴리스는 자동 설치용 정보가 없어요"))

@@ -13,6 +13,7 @@ ktx.old 는 새 exe 가 첫 실행에 지운다 — 새 exe 가 뜨지 못했다
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import logging
 import os
@@ -35,6 +36,9 @@ RELEASES_PREFIX = "https://github.com/JayChoi07/ktx/releases/"
 ASSET_NAME = "ktx.exe"
 CHECK_EVERY = 24 * 3600
 MAX_EXE_BYTES = 200 * 1024 * 1024  # 이보다 큰 파일은 릴리스 exe 가 아니다
+ALLOWED_HOSTS = ("github.com", "githubusercontent.com")  # 릴리스 파일은 github.com 에서 *.githubusercontent.com 으로 리다이렉트된다
+MAX_REDIRECTS = 5
+DOWNLOAD_DEADLINE = 300.0  # 내려받기 전체에 거는 시간 제한(초) — 읽기 제한은 한 번의 읽기에만 적용된다
 
 available: dict | None = None  # {"version", "url", "asset": {"url", "sha256", "size"} | None} — 더 새로운 릴리스가 있을 때
 install_state: dict = {"phase": "idle", "done": 0, "total": 0, "error": None}  # phase: idle | downloading | installing | error
@@ -116,53 +120,108 @@ def can_install() -> tuple[bool, str | None]:
     return True, None
 
 
+def _host_ok(url: str) -> bool:
+    """내려받기 주소로 따라가도 되는 곳: HTTPS 이고 github.com / *.githubusercontent.com 뿐."""
+    try:
+        u = httpx.URL(url)
+    except Exception:
+        return False
+    host = u.host or ""
+    return u.scheme == "https" and any(host == h or host.endswith("." + h) for h in ALLOWED_HOSTS)
+
+
 def download(asset: dict, part: Path, progress: Callable[[int], None] | None = None) -> None:
-    """asset 을 part 에 받으며 크기·SHA256 을 대조한다. 어긋나면 파일을 지우고 UpdateError."""
-    if not str(asset["url"]).startswith(RELEASES_PREFIX):
+    """asset 을 part 에 받으며 크기·SHA256 을 대조한다. 어긋나면 파일을 지우고 UpdateError.
+
+    리다이렉트는 직접 따라간다: 매 단계마다 HTTPS·호스트를 확인하고 리다이렉트 응답의 본문은 읽지 않는다.
+    전체 시간 제한(DOWNLOAD_DEADLINE)과 압축 금지(Accept-Encoding: identity)로 크기 검사를 우회하거나 작업을 붙잡지 못하게 한다.
+    """
+    url = str(asset["url"])
+    if not url.startswith(RELEASES_PREFIX):
         raise UpdateError("허용되지 않은 내려받기 주소예요")
+    deadline = time.monotonic() + DOWNLOAD_DEADLINE
     digest, done = hashlib.sha256(), 0
     try:
-        with httpx.stream("GET", asset["url"], follow_redirects=True, timeout=httpx.Timeout(30, read=60)) as r:
-            if r.is_error:
-                raise UpdateError(f"내려받기에 실패했어요 (HTTP {r.status_code})")
-            with part.open("wb") as f:
-                for chunk in r.iter_bytes(64 * 1024):
-                    done += len(chunk)
-                    if done > asset["size"]:
-                        raise UpdateError("받은 파일이 예상보다 커요")
-                    digest.update(chunk)
-                    f.write(chunk)
-                    if progress:
-                        progress(done)
+        for _ in range(MAX_REDIRECTS + 1):
+            request = {"follow_redirects": False, "headers": {"Accept-Encoding": "identity"}, "timeout": httpx.Timeout(30, read=60)}
+            with httpx.stream("GET", url, **request) as r:
+                if r.is_redirect:
+                    url = str(r.url.join(r.headers["location"]))
+                    if not _host_ok(url):
+                        raise UpdateError("허용되지 않은 주소로 이동하려 해요")
+                    continue
+                if r.is_error:
+                    raise UpdateError(f"내려받기에 실패했어요 (HTTP {r.status_code})")
+                with part.open("wb") as f:
+                    for chunk in r.iter_bytes(64 * 1024):
+                        if time.monotonic() > deadline:
+                            raise UpdateError("내려받는 데 너무 오래 걸려요")
+                        done += len(chunk)
+                        if done > asset["size"]:
+                            raise UpdateError("받은 파일이 예상보다 커요")
+                        digest.update(chunk)
+                        f.write(chunk)
+                        if progress:
+                            progress(done)
+            break
+        else:
+            raise UpdateError("리다이렉트가 너무 많이 이어져요")
         if done != asset["size"]:
             raise UpdateError("받은 파일 크기가 맞지 않아요")
         if digest.hexdigest() != asset["sha256"]:
             raise UpdateError("받은 파일의 SHA256이 달라요 (손상됐거나 바뀌었을 수 있어요)")
     except BaseException:
-        part.unlink(missing_ok=True)  # 검증 못 한 파일은 남기지 않는다
+        with contextlib.suppress(OSError):
+            part.unlink(missing_ok=True)  # 검증 못 한 파일은 남기지 않는다
         raise
 
 
-def _ps(value) -> str:
-    """PowerShell 작은따옴표 문자열 리터럴."""
-    return "'" + str(value).replace("'", "''") + "'"
+def _data(value) -> str:
+    """경로를 PowerShell '문법'이 아니라 '데이터'로 넘기는 표현식.
+
+    PowerShell 은 ASCII ' 말고도 ‘ ’ ‚ ‛ 를 작은따옴표로 취급해서, 이스케이프로는 폴더 이름이 명령이 되는 걸 막지 못한다.
+    Base64 로 감싸면 스크립트에는 [A-Za-z0-9+/=] 만 들어간다.
+    """
+    b64 = base64.b64encode(str(value).encode("utf-8")).decode()
+    return f"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{b64}'))"
 
 
-def helper_script(pid: int, exe: Path, new: Path, old: Path, start: bool = True) -> str:
-    """이 프로세스(pid)가 끝난 뒤 exe 를 바꾸고 새 exe 를 띄우는 PowerShell. 교체가 실패하면 옛 exe 를 되돌린다."""
+def helper_script(pid: int, exe: Path, new: Path, old: Path, sha256: str | None = None, start: bool = True, wait: int = 60) -> str:
+    """이 프로세스(pid)가 끝난 뒤 exe 를 바꾸고 새 exe 를 띄우는 PowerShell.
+
+    - pid 가 wait 초 안에 끝나지 않으면 아무것도 바꾸지 않고 중단한다 (옛 서버가 살아 있는데 디스크만 바뀌는 일을 막는다).
+    - sha256 이 주어지면 교체 직전에 ktx-new.exe 를 다시 검증한다. 다르면 지우고 교체하지 않은 채 옛 exe 를 다시 띄운다.
+    - 이동이 실패하면 옛 exe 를 되돌린다. 어떤 경우에도 마지막에 (새 또는 옛) exe 를 띄운다.
+    """
+    if sha256 is not None and not re.fullmatch(r"[0-9a-fA-F]{64}", sha256):
+        raise ValueError("sha256 형식이 올바르지 않아요")
     lines = [
-        f"Wait-Process -Id {pid} -Timeout 60 -ErrorAction SilentlyContinue",
+        f"$exe = {_data(exe)}",
+        f"$new = {_data(new)}",
+        f"$old = {_data(old)}",
+        f"$p = Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue",
+        f"if ($p) {{ $null = $p.WaitForExit({int(wait) * 1000}); if (-not $p.HasExited) {{ exit 1 }} }}",
         "Start-Sleep -Seconds 1",
-        "try {",
-        f"  Move-Item -LiteralPath {_ps(exe)} -Destination {_ps(old)} -Force -ErrorAction Stop",
-        f"  Move-Item -LiteralPath {_ps(new)} -Destination {_ps(exe)} -Force -ErrorAction Stop",
-        "} catch {",
-        f"  if (-not (Test-Path -LiteralPath {_ps(exe)}) -and (Test-Path -LiteralPath {_ps(old)})) "
-        f"{{ Move-Item -LiteralPath {_ps(old)} -Destination {_ps(exe)} -Force }}",
+        "$swap = $true",
+    ]
+    if sha256:
+        lines += [
+            "try { $h = (Get-FileHash -LiteralPath $new -Algorithm SHA256).Hash } catch { $h = '' }",
+            f"if ($h -ne '{sha256.upper()}') {{ $swap = $false; Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue }}",
+        ]
+    lines += [
+        "if ($swap) {",
+        "  try {",
+        "    Move-Item -LiteralPath $exe -Destination $old -Force -ErrorAction Stop",
+        "    Move-Item -LiteralPath $new -Destination $exe -Force -ErrorAction Stop",
+        "  } catch {",
+        "    if (-not (Test-Path -LiteralPath $exe) -and (Test-Path -LiteralPath $old)) "
+        "{ Move-Item -LiteralPath $old -Destination $exe -Force }",
+        "  }",
         "}",
     ]
     if start:  # --updated: 새 exe 가 브라우저 탭을 또 열지 않게 한다
-        lines.append(f"Start-Process -FilePath {_ps(exe)} -WorkingDirectory {_ps(exe.parent)} -ArgumentList '--updated'")
+        lines.append("Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) -ArgumentList '--updated'")
     return "\n".join(lines)
 
 
@@ -184,34 +243,61 @@ def _friendly(e: Exception) -> str:
     return f"업데이트에 실패했어요: {e}"
 
 
-def _install(asset: dict, exit_cb: Callable[[], None]) -> None:
+def _install(
+    asset: dict,
+    exit_cb: Callable[[], None],
+    hold: Callable[[], bool] | None = None,
+    release: Callable[[], None] | None = None,
+) -> None:
+    """hold: 교체 직전에 새 예약을 막고 결제 대기 건이 없을 때만 True. release: hold 이후 실패했을 때 막은 것을 푼다."""
     exe = Path(sys.executable)
     new, part, old = exe.with_name("ktx-new.exe"), exe.with_name("ktx-new.exe.part"), exe.with_name("ktx.old")
+    held = False
     try:
         install_state.update(phase="downloading", done=0, total=asset["size"], error=None)
         download(asset, part, progress=lambda n: install_state.update(done=n))
         install_state["phase"] = "installing"
         part.replace(new)
-        _spawn_helper(helper_script(os.getpid(), exe, new, old))
+        if hold is not None:
+            if not hold():  # 다운로드 하는 사이 감시가 예약을 잡았을 수 있다 — 재시작하면 결제 알림이 끊긴다
+                raise UpdateError("방금 예약이 잡혀서 업데이트를 미뤘어요. 결제를 마친 뒤 다시 눌러 주세요.")
+            held = True
+        _spawn_helper(helper_script(os.getpid(), exe, new, old, sha256=asset["sha256"]))
         time.sleep(1.5)  # 화면이 '다시 시작하는 중'을 볼 시간
         exit_cb()
     except Exception as e:
         log.warning("업데이트 실패: %s", e)
-        for p in (part, new):
-            p.unlink(missing_ok=True)
+        # 정리보다 먼저 기록한다 — 파일이 잠겨 지우지 못해도 화면이 '받는 중'에 멈춰 있으면 안 된다
         install_state.update(phase="error", error=_friendly(e))
+        if held and release is not None:
+            with contextlib.suppress(Exception):
+                release()
+        for p in (part, new):
+            with contextlib.suppress(OSError):
+                p.unlink(missing_ok=True)
     finally:
         _install_lock.release()
 
 
-def start_install(exit_cb: Callable[[], None]) -> bool:
+def start_install(
+    exit_cb: Callable[[], None],
+    hold: Callable[[], bool] | None = None,
+    release: Callable[[], None] | None = None,
+) -> bool:
     """백그라운드에서 내려받아 교체한다. 이미 진행 중이면 False, 할 수 없는 상태면 UpdateError."""
     ok, why = can_install()
     if not ok:
         raise UpdateError(why)
     if not _install_lock.acquire(blocking=False):
         return False
-    threading.Thread(target=_install, args=(dict(available["asset"]), exit_cb), name="ktx-install", daemon=True).start()
+    try:  # 스레드가 락을 넘겨받기 전에 실패하면 여기서 풀어야 한다 (안 그러면 이후 모든 설치가 '진행 중'으로 거절된다)
+        info = available  # can_install 이후 주기 확인이 바꿔 치울 수 있어 한 번만 읽는다
+        if not info or not info.get("asset"):
+            raise UpdateError("새 버전 정보가 바뀌었어요. 다시 확인해 주세요.")
+        threading.Thread(target=_install, args=(dict(info["asset"]), exit_cb, hold, release), name="ktx-install", daemon=True).start()
+    except BaseException:
+        _install_lock.release()
+        raise
     return True
 
 

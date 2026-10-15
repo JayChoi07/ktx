@@ -37,11 +37,18 @@ def _should_auto_open(argv: list[str]) -> bool:
     return "--updated" not in argv
 
 
-def _cleanup_update_leftovers(exe: Path) -> None:
-    """업데이트가 남긴 ktx.old(옛 exe)와 받다 만 파일을 지운다. 잠겨 있으면 다음 실행에 다시 시도한다."""
-    for name in ("ktx.old", "ktx-new.exe", "ktx-new.exe.part"):
+def _remove_stale_downloads(exe: Path) -> None:
+    """받다 만 업데이트 파일. 막 시작한 프로세스에는 진행 중인 설치가 있을 수 없으니 바로 지워도 된다."""
+    for name in ("ktx-new.exe", "ktx-new.exe.part"):
         with contextlib.suppress(OSError):
             exe.with_name(name).unlink(missing_ok=True)
+
+
+def _remove_old_exe_when_serving(exe: Path) -> None:
+    """업데이트가 남긴 옛 exe(ktx.old)는 새 exe 의 서버가 실제로 응답할 때만 지운다. 시작에 실패했다면 복구용으로 남겨 둔다."""
+    if _already_running():
+        with contextlib.suppress(OSError):
+            exe.with_name("ktx.old").unlink(missing_ok=True)
 
 
 class _LogStream:
@@ -112,8 +119,10 @@ def main() -> None:
     if TRAY:
         _setup_file_logging()
     if getattr(sys, "frozen", False):
-        # 새 exe 가 제대로 뜬 뒤에 옛 exe(ktx.old)를 지운다 — 바로 죽는 exe 라면 복구할 수 있게 남겨 둔다
-        cleanup = threading.Timer(15, _cleanup_update_leftovers, [Path(sys.executable)])
+        exe = Path(sys.executable)
+        _remove_stale_downloads(exe)
+        # 옛 exe(ktx.old)는 새 exe 가 제대로 뜬 뒤에 지운다 — 바로 죽는 exe 라면 복구할 수 있게 남겨 둔다
+        cleanup = threading.Timer(15, _remove_old_exe_when_serving, [exe])
         cleanup.daemon = True
         cleanup.start()
 

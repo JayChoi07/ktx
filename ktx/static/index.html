@@ -251,7 +251,7 @@ const OPTION_HINT = {
   SPECIAL_ONLY: '특실 자리가 날 때만 잡아요. 요금이 더 비싸요.',
 };
 let S = null, failures = 0;
-let updating = false, fastTimer = null;  // 업데이트(내려받기→교체→재시작) 진행 중이면 빠르게 폴링하고, 재시작 중 끊김을 크래시로 보여 주지 않는다
+let updating = false, fastTimer = null, bootId = null;  // 업데이트(내려받기→교체→재시작) 진행 중이면 빠르게 폴링하고, 재시작 중 끊김을 크래시로 보여 주지 않는다
 let form = { option:'GENERAL_FIRST', train_type:'KTX', adults:1 };
 let formReady = false, wizardShown = -1, formOpened = false;
 const cards = new Map();
@@ -543,11 +543,11 @@ setInterval(() => {
 
 /* ---------------- 폴링 ---------------- */
 async function poll() {
-  try {
-    const wasDown = failures > 0;
-    S = await api('/api/state'); failures = 0;
-    if (updating && wasDown) { location.reload(); return; }  // 새 프로그램이 다시 떴다 — 새 화면 코드를 받는다
-  } catch { failures++; renderBanners(); return; }
+  try { S = await api('/api/state'); failures = 0; } catch { failures++; renderBanners(); return; }
+  if (S.boot) {  // 다른 프로세스가 응답한다 = 서버가 재시작됐다(업데이트 등). 끊김을 못 봤어도 새 화면 코드를 받는다
+    if (bootId && bootId !== S.boot) { location.reload(); return; }
+    bootId = S.boot;
+  }
   const phase = S.update_install && S.update_install.phase;
   if (phase === 'downloading' || phase === 'installing') { updating = true; fastPoll(); } else if (phase === 'error') updating = false;
   renderStatus(); renderWizard(); renderBanners();

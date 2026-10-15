@@ -10,7 +10,9 @@ import hashlib
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
+import httpx
 import pytest
 
 from ktx import update
@@ -140,9 +142,15 @@ def test_check_now_reports_each_outcome(github):
 
 
 # ---------------------------------------------------------------- 내려받기 검증
+CDN = "https://release-assets.githubusercontent.com/github-production-release-asset/1/abc?sig=x"
+
+
 class FakeStream:
-    def __init__(self, chunks, status=200):
-        self.chunks, self.status_code, self.is_error = chunks, status, status >= 400
+    def __init__(self, chunks=(), status=200, location=None):
+        self.chunks, self.status_code, self.is_error = list(chunks), status, status >= 400
+        self.is_redirect = status in (301, 302, 307, 308)
+        self.headers = {"location": location} if location else {}
+        self.url = httpx.URL(EXE_URL)
 
     def __enter__(self):
         return self
@@ -151,18 +159,24 @@ class FakeStream:
         return False
 
     def iter_bytes(self, size=None):
+        assert not self.is_redirect, "리다이렉트 응답의 본문은 읽으면 안 된다"
         yield from self.chunks
 
 
-def serve_file(monkeypatch, chunks, status=200):
-    seen = {}
+def serve(monkeypatch, *responses):
+    """httpx.stream 이 호출될 때마다 responses 를 차례로 돌려주고, 호출 기록을 모아 돌려준다."""
+    seen, queue = [], list(responses)
 
     def fake_stream(method, url, **kw):
-        seen.update(method=method, url=url, **kw)
-        return FakeStream(chunks, status)
+        seen.append({"method": method, "url": url, **kw})
+        return queue.pop(0)
 
     monkeypatch.setattr(update.httpx, "stream", fake_stream)
     return seen
+
+
+def serve_file(monkeypatch, chunks, status=200):
+    return serve(monkeypatch, FakeStream(chunks, status))
 
 
 def sha(data: bytes) -> str:
@@ -176,7 +190,9 @@ def test_download_verifies_size_and_sha256_and_reports_progress(tmp_path, monkey
     part = tmp_path / "ktx-new.exe.part"
     update.download({"url": EXE_URL, "sha256": sha(data), "size": len(data)}, part, progress.append)
     assert part.read_bytes() == data and progress == [300, len(data)]
-    assert seen["url"] == EXE_URL and seen["follow_redirects"] is True  # GitHub 는 다른 호스트로 리다이렉트한다
+    assert seen[0]["url"] == EXE_URL
+    assert seen[0]["follow_redirects"] is False  # 리다이렉트는 직접 처리한다 (아래 테스트)
+    assert seen[0]["headers"]["Accept-Encoding"] == "identity"  # 압축 응답으로 크기 검사를 우회하지 못하게
 
 
 @pytest.mark.parametrize(
@@ -201,7 +217,53 @@ def test_download_refuses_a_url_outside_this_repo(tmp_path, monkeypatch):
     seen = serve_file(monkeypatch, [b"x"])
     with pytest.raises(update.UpdateError, match="주소"):
         update.download({"url": "https://evil.example/ktx.exe", "sha256": SHA, "size": 1}, tmp_path / "p")
-    assert seen == {}  # 요청 자체를 보내지 않는다
+    assert seen == []  # 요청 자체를 보내지 않는다
+
+
+def test_download_follows_github_redirects_by_hand_over_https(tmp_path, monkeypatch):
+    data = b"exe-bytes"
+    seen = serve(monkeypatch, FakeStream(status=302, location=CDN), FakeStream([data]))
+    update.download({"url": EXE_URL, "sha256": sha(data), "size": len(data)}, tmp_path / "p")
+    assert [s["url"] for s in seen] == [EXE_URL, CDN] and all(s["follow_redirects"] is False for s in seen)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "http://release-assets.githubusercontent.com/x",  # HTTPS -> HTTP 다운그레이드
+        "https://evil.example/x",
+        "https://githubusercontent.com.evil.example/x",  # 접미사만 비슷한 호스트
+        "ftp://github.com/x",
+    ],
+)
+def test_download_refuses_redirects_that_leave_https_github(tmp_path, monkeypatch, target):
+    seen = serve(monkeypatch, FakeStream(status=302, location=target), FakeStream([b"x"]))
+    with pytest.raises(update.UpdateError, match="주소"):
+        update.download({"url": EXE_URL, "sha256": SHA, "size": 1}, tmp_path / "p")
+    assert len(seen) == 1  # 허용되지 않은 곳으로는 요청을 보내지 않는다
+
+
+def test_download_gives_up_after_too_many_redirects(tmp_path, monkeypatch):
+    serve(monkeypatch, *[FakeStream(status=302, location=CDN) for _ in range(20)])
+    with pytest.raises(update.UpdateError, match="너무 많이"):
+        update.download({"url": EXE_URL, "sha256": SHA, "size": 1}, tmp_path / "p")
+
+
+def test_download_has_an_overall_deadline(tmp_path, monkeypatch):
+    """조금씩 계속 오는 응답이 작업을 붙잡고 있지 못하게 — 읽기 제한(read=60)은 한 번의 읽기에만 적용된다."""
+    serve(monkeypatch, FakeStream([b"a" * 10, b"a" * 10]))
+    clock = iter([0.0])
+
+    class FakeTime:
+        @staticmethod
+        def monotonic():
+            return next(clock, update.DOWNLOAD_DEADLINE + 1.0)  # 처음 한 번만 0 이고 그 뒤로는 기한을 넘긴 시각
+
+    monkeypatch.setattr(update, "time", FakeTime)
+    part = tmp_path / "p"
+    with pytest.raises(update.UpdateError, match="너무 오래"):
+        update.download({"url": EXE_URL, "sha256": SHA, "size": 20}, part)
+    assert not part.exists()
 
 
 # ---------------------------------------------------------------- 설치 가능 조건 / 흐름
@@ -217,10 +279,10 @@ def installable(monkeypatch, tmp_path):
     return exe
 
 
-def run_install(exit_cb):
+def run_install(exit_cb, hold=None, release=None):
     """start_install 이 하는 대로 락을 잡고 _install 을 (스레드 없이) 직접 돌린다. _install 은 끝나면 락을 푼다."""
     assert update._install_lock.acquire(blocking=False)
-    update._install(dict(update.available["asset"]), exit_cb)
+    update._install(dict(update.available["asset"]), exit_cb, hold, release)
 
 
 def test_can_install_requires_a_frozen_exe_and_a_verifiable_release(installable, monkeypatch):
@@ -268,6 +330,86 @@ def test_failed_install_reports_the_reason_cleans_up_and_does_not_exit(installab
     assert not list(installable.parent.glob("ktx-new*"))
 
 
+def fake_download_ok(a, part, progress=None):
+    part.write_bytes(b"NEW")
+    if progress:
+        progress(3)
+
+
+def test_install_holds_new_reservations_right_before_restarting(installable, monkeypatch):
+    """다운로드 중에 예약이 잡혔을 수 있다 — 교체 직전에 새 예약을 막고 결제 대기 건이 없을 때만 재시작한다 (astra 리뷰)."""
+    order = []
+    monkeypatch.setattr(update, "download", lambda a, part, progress=None: (fake_download_ok(a, part, progress), order.append("download")))
+    monkeypatch.setattr(update, "_spawn_helper", lambda script: order.append("helper"))
+    monkeypatch.setattr(update.time, "sleep", lambda s: None)
+    run_install(lambda: order.append("exit"), hold=lambda: order.append("hold") or True, release=lambda: order.append("release"))
+    assert order == ["download", "hold", "helper", "exit"]  # 막은 뒤에야 헬퍼를 띄우고, 정상이면 풀지 않는다(곧 종료)
+
+
+def test_install_is_postponed_when_a_booking_slipped_in(installable, monkeypatch):
+    spawned = []
+    monkeypatch.setattr(update, "download", fake_download_ok)
+    monkeypatch.setattr(update, "_spawn_helper", lambda script: spawned.append(script))
+    exited = []
+    run_install(lambda: exited.append(1), hold=lambda: False, release=lambda: spawned.append("release"))
+    assert spawned == [] and exited == []  # 아무것도 바꾸지 않고 종료하지도 않는다
+    assert update.install_state["phase"] == "error" and "예약" in update.install_state["error"]
+    assert not list(installable.parent.glob("ktx-new*"))
+
+
+def test_hold_is_released_when_the_restart_fails_after_it(installable, monkeypatch):
+    released = []
+    monkeypatch.setattr(update, "download", fake_download_ok)
+
+    def boom(script):
+        raise OSError("powershell 를 못 찾았어요")
+
+    monkeypatch.setattr(update, "_spawn_helper", boom)
+    run_install(lambda: None, hold=lambda: True, release=lambda: released.append(1))
+    assert released == [1] and update.install_state["phase"] == "error"  # 감시가 새 예약을 영영 못 잡는 일은 없어야 한다
+
+
+def test_error_state_is_recorded_even_if_cleanup_is_blocked(installable, monkeypatch):
+    """백신·다른 프로세스가 파일을 잡고 있어 지우지 못해도 화면이 '받는 중'에 멈춰 있으면 안 된다 (astra 리뷰)."""
+
+    def bad_download(a, part, progress=None):
+        part.write_bytes(b"partial")
+        raise update.UpdateError("받은 파일 크기가 맞지 않아요")
+
+    def locked(self, *a, **k):
+        raise PermissionError(13, "in use")
+
+    monkeypatch.setattr(update, "download", bad_download)
+    monkeypatch.setattr(Path, "unlink", locked)
+    run_install(lambda: None)
+    assert update.install_state["phase"] == "error" and "크기" in update.install_state["error"]
+
+
+def test_start_install_does_not_leak_the_lock_when_release_info_vanishes(installable, monkeypatch):
+    """can_install 통과 뒤 주기 확인이 asset 없는 릴리스로 바꿔 치면 예외로 락이 영구히 잡히던 경합 (astra 리뷰)."""
+    monkeypatch.setattr(update, "can_install", lambda: (True, None))
+    monkeypatch.setattr(update, "available", {"version": "1.4.0", "url": RELEASE, "asset": None})
+    with pytest.raises(update.UpdateError):
+        update.start_install(lambda: None)
+    assert update._install_lock.acquire(blocking=False)  # 락이 풀려 있다
+    update._install_lock.release()
+
+
+def test_start_install_releases_the_lock_if_the_thread_cannot_start(installable, monkeypatch):
+    class NoThread:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(update.threading, "Thread", NoThread)
+    with pytest.raises(RuntimeError):
+        update.start_install(lambda: None)
+    assert update._install_lock.acquire(blocking=False)
+    update._install_lock.release()
+
+
 def test_unwritable_folder_gives_a_readable_error(installable, monkeypatch):
     def denied(a, part, progress=None):
         raise PermissionError(13, "Access is denied")
@@ -278,7 +420,8 @@ def test_unwritable_folder_gives_a_readable_error(installable, monkeypatch):
 
 
 def test_only_one_install_runs_at_a_time(installable, monkeypatch):
-    monkeypatch.setattr(update, "_install", lambda asset, exit_cb: update._install_lock.release())  # 실제 _install 처럼 끝나면 락을 푼다
+    # 실제 _install 처럼 끝나면 락을 푼다
+    monkeypatch.setattr(update, "_install", lambda asset, exit_cb, hold, release: update._install_lock.release())
     assert update.start_install(lambda: None) is True
     update._install_lock.acquire()  # 첫 설치가 아직 진행 중인 것처럼
     try:
@@ -291,34 +434,51 @@ def test_only_one_install_runs_at_a_time(installable, monkeypatch):
 
 
 # ---------------------------------------------------------------- 교체 헬퍼 스크립트 (실제 PowerShell)
-def test_helper_script_waits_swaps_with_a_rollback_and_restarts_flagged(tmp_path):
-    exe, new, old = tmp_path / "it's ktx.exe", tmp_path / "ktx-new.exe", tmp_path / "ktx.old"
-    s = update.helper_script(4242, exe, new, old)
-    assert "Wait-Process -Id 4242" in s
-    assert "'" + str(exe).replace("'", "''") + "'" in s  # 경로의 작은따옴표를 이스케이프한다
-    assert "Move-Item" in s and "catch" in s  # 교체가 실패하면 옛 exe 를 되돌린다
+def test_helper_script_passes_paths_as_data_not_as_script_syntax(tmp_path):
+    """PowerShell 은 ASCII ' 말고 ‘ ’ ‚ ‛ 도 작은따옴표로 쳐서 이스케이프로 못 막는다 — 경로를 스크립트 문법에 넣지 않는다 (astra 리뷰)."""
+    exe = tmp_path / "O’Brien ‘x’ it's" / "ktx.exe"
+    s = update.helper_script(4242, exe, exe.with_name("ktx-new.exe"), exe.with_name("ktx.old"), sha256="AB" * 32)
+    assert str(exe) not in s and "O’Brien" not in s and "it's" not in s
+    assert base64.b64encode(str(exe).encode("utf-8")).decode() in s
+    assert "Get-FileHash" in s and "AB" * 32 in s  # 교체 직전에 파일을 한 번 더 검증한다
     assert "--updated" in s and "Start-Process" in s
-    assert "Start-Process" not in update.helper_script(4242, exe, new, old, start=False)
+    assert "Start-Process" not in update.helper_script(4242, exe, exe.with_name("ktx-new.exe"), exe.with_name("ktx.old"), start=False)
 
 
-def run_helper(script: str) -> None:
+def run_helper(script: str) -> int:
     enc = base64.b64encode(script.encode("utf-16-le")).decode()
     cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc]
-    subprocess.run(cmd, check=True, timeout=60)
+    return subprocess.run(cmd, timeout=90).returncode
 
 
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="PowerShell 교체 스크립트는 Windows 전용")
+CMD_EXE = r"C:\Windows\System32\cmd.exe"
+
+
+def running_fake_exe(exe: Path, seconds: int) -> subprocess.Popen:
+    shutil.copy(CMD_EXE, exe)  # 실행 중인 'ktx.exe' 흉내
+    return subprocess.Popen([str(exe), "/c", f"ping -n {seconds} 127.0.0.1 >nul"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 @windows_only
 def test_helper_really_swaps_files_after_the_process_exits(tmp_path):
     exe, new, old = tmp_path / "ktx.exe", tmp_path / "ktx-new.exe", tmp_path / "ktx.old"
-    shutil.copy(r"C:\Windows\System32\cmd.exe", exe)  # 실행 중인 'ktx.exe' 흉내
     new.write_bytes(b"NEW-EXE")
-    proc = subprocess.Popen([str(exe), "/c", "ping -n 3 127.0.0.1 >nul"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    run_helper(update.helper_script(proc.pid, exe, new, old, start=False))
+    proc = running_fake_exe(exe, 3)
+    run_helper(update.helper_script(proc.pid, exe, new, old, sha256=sha(b"NEW-EXE").upper(), start=False))
     assert exe.read_bytes() == b"NEW-EXE" and old.exists() and not new.exists()
     assert old.stat().st_size > 10_000  # 옛 exe 는 .old 로 남는다 (새 exe 가 첫 실행에 지운다)
+
+
+@windows_only
+def test_helper_refuses_a_file_that_no_longer_matches_the_verified_hash(tmp_path):
+    """검증한 뒤 ktx-new.exe 가 바뀌었다면 실행하지 않는다 — 그리고 옛 exe 는 그대로 둔다 (astra 리뷰)."""
+    exe, new, old = tmp_path / "ktx.exe", tmp_path / "ktx-new.exe", tmp_path / "ktx.old"
+    new.write_bytes(b"TAMPERED")
+    proc = running_fake_exe(exe, 2)
+    original = exe.read_bytes()
+    run_helper(update.helper_script(proc.pid, exe, new, old, sha256=sha(b"THE-VERIFIED-BYTES"), start=False))
+    assert exe.read_bytes() == original and not old.exists() and not new.exists()
 
 
 @windows_only
@@ -329,3 +489,36 @@ def test_helper_restores_the_old_exe_when_the_new_one_is_missing(tmp_path):
     done.wait()
     run_helper(update.helper_script(done.pid, exe, new, old, start=False))  # 새 파일이 없어 두 번째 이동이 실패한다
     assert exe.read_bytes() == b"OLD-EXE" and not old.exists()  # 프로그램이 사라지는 일은 없어야 한다
+
+
+@windows_only
+def test_helper_changes_nothing_if_the_old_process_does_not_exit(tmp_path):
+    """종료를 확인하지 못했는데 교체·재실행하면 디스크만 새 버전이고 서버는 옛 버전으로 남는다 (astra 리뷰)."""
+    exe, new, old = tmp_path / "ktx.exe", tmp_path / "ktx-new.exe", tmp_path / "ktx.old"
+    new.write_bytes(b"NEW-EXE")
+    proc = running_fake_exe(exe, 30)
+    try:
+        original = exe.read_bytes()
+        code = run_helper(update.helper_script(proc.pid, exe, new, old, start=False, wait=2))
+        assert code != 0  # 중단했다
+        assert exe.read_bytes() == original and not old.exists() and new.exists()  # 아무것도 바꾸지 않았다
+    finally:
+        proc.kill()
+
+
+@windows_only
+def test_helper_survives_quotes_and_injection_in_the_folder_name(tmp_path):
+    """폴더 이름이 스크립트가 되면 안 된다. 곧은 따옴표·굽은 따옴표·$(…) 가 든 이름에서도 그냥 교체만 된다 (astra 리뷰)."""
+    marker = Path.home() / "ktx_inj_marker.txt"
+    marker.unlink(missing_ok=True)
+    folder = tmp_path / "x’$(Set-Content ($HOME+[char]92+'ktx_inj_marker.txt') 1)’ O’Brien it's"
+    folder.mkdir()
+    exe, new, old = folder / "ktx.exe", folder / "ktx-new.exe", folder / "ktx.old"
+    new.write_bytes(b"NEW-EXE")
+    proc = running_fake_exe(exe, 3)
+    try:
+        run_helper(update.helper_script(proc.pid, exe, new, old, sha256=sha(b"NEW-EXE"), start=False))
+        assert not marker.exists(), "폴더 이름에 든 명령이 실행됐다"
+        assert exe.read_bytes() == b"NEW-EXE" and old.exists()
+    finally:
+        marker.unlink(missing_ok=True)

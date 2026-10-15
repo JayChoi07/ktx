@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -532,6 +533,60 @@ def test_access_restriction_while_checking_the_reservation_pauses_too(mon):
     mon.korail.reservations.find = blocked
     mon._remind([job(mon, j["id"])])
     assert mon.paused_until > time.time() + 500 and job(mon, j["id"])["status"] == "reserved"
+
+
+# ---------------------------------------------------------------- 재시작 직전 게이트 (자동 업데이트)
+def test_hold_for_restart_refuses_while_a_booking_awaits_payment(mon):
+    _reserved_job(mon, timedelta(minutes=5))
+    assert mon.hold_for_restart(timeout=1) is False
+    assert mon._restarting is False  # 거절했으면 감시는 그대로 새 예약을 받는다
+
+
+def test_hold_for_restart_blocks_new_bookings_until_released(mon):
+    j = add_job(mon)
+    assert mon.hold_for_restart(timeout=1) is True
+    mon._try_reserve(j, [FakeTrain("0700", general=True)])
+    assert not mon.korail.reservations.created  # 재시작 직전엔 새 예약을 만들지 않는다
+    mon.release_restart()
+    mon._try_reserve(j, [FakeTrain("0700", general=True)])
+    assert len(mon.korail.reservations.created) == 1  # 재시작이 취소되면 감시가 다시 예약한다
+
+
+def test_hold_for_restart_waits_for_a_booking_in_flight(mon):
+    """코레일 예약이 나가는 중에 재시작하면 예약은 있는데 추적도 알림도 없다 (astra 리뷰)."""
+    j = add_job(mon)
+    entered, proceed = threading.Event(), threading.Event()
+    rs = mon.korail.reservations
+    real_create = rs.create
+
+    def slow_create(*a, **k):
+        entered.set()
+        assert proceed.wait(5)
+        return real_create(*a, **k)
+
+    rs.create = slow_create
+    booking = threading.Thread(target=mon._try_reserve, args=(j, [FakeTrain("0700", general=True)]))
+    booking.start()
+    assert entered.wait(5)
+    result = []
+    holder = threading.Thread(target=lambda: result.append(mon.hold_for_restart(timeout=5)))
+    holder.start()
+    threading.Event().wait(0.3)
+    assert result == []  # 진행 중인 예약이 끝나기를 기다린다
+    proceed.set()
+    booking.join(5)
+    holder.join(5)
+    assert result == [False]  # 끝나고 보니 결제 대기 건이 생겼다 — 재시작하면 안 된다
+    assert job(mon, j["id"])["status"] == "reserved"
+
+
+def test_hold_for_restart_gives_up_if_a_booking_never_finishes(mon):
+    assert mon._reserve_lock.acquire(timeout=1)
+    try:
+        assert mon.hold_for_restart(timeout=0.2) is False
+        assert mon._restarting is False
+    finally:
+        mon._reserve_lock.release()
 
 
 def test_cancel_reservation(mon):

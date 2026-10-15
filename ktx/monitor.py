@@ -106,6 +106,8 @@ class Monitor:
         self._reminders: dict[str, float] = {}
         self._block_pinged = False  # 접속 제한이 이어지는 동안 @everyone 은 첫 알림에만 쓴다
         self._block_notified_at = 0.0
+        self._reserve_lock = threading.Lock()  # 코레일 예약 생성~저장 구간. 재시작 전에 이 구간이 끝나기를 기다린다
+        self._restarting = False  # True 면 새 예약을 만들지 않는다 (업데이트 재시작 직전)
         self.notify_error: str | None = None  # 마지막 디스코드 전송이 실패했다면 그 이유 (화면에 보여준다)
 
     # ---------- 공개 ----------
@@ -326,6 +328,30 @@ class Monitor:
         return any(j["id"] == job_id and j["status"] == "watching" for j in self.jobs.all())
 
     def _try_reserve(self, job: dict, trains: list) -> None:
+        with self._reserve_lock:  # 예약 생성과 저장 사이에 프로세스가 끝나 예약이 추적 없이 남는 일을 막는다 (hold_for_restart)
+            if self._restarting:
+                return
+            self._try_reserve_locked(job, trains)
+
+    def hold_for_restart(self, timeout: float = 30.0) -> bool:
+        """업데이트로 재시작하기 직전에 호출한다. 새 예약을 막고 진행 중인 예약 처리가 끝나기를 기다린 뒤,
+        결제 대기 중인 예약이 없을 때만 True (재시작해도 된다). 아니면 막은 것을 풀고 False."""
+        self._restarting = True
+        if not self._reserve_lock.acquire(timeout=timeout):
+            self._restarting = False
+            return False
+        try:
+            if any(j["status"] == "reserved" for j in self.jobs.all()):
+                self._restarting = False
+                return False
+            return True
+        finally:
+            self._reserve_lock.release()
+
+    def release_restart(self) -> None:
+        self._restarting = False
+
+    def _try_reserve_locked(self, job: dict, trains: list) -> None:
         ymd = job["date"].replace("-", "")
         want_from, want_to = job["time_from"].replace(":", ""), job["time_to"].replace(":", "")
         taken = {j["result"]["train_key"] for j in self.jobs.all() if j["status"] in ("reserved", "paid") and j.get("result")}

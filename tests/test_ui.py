@@ -27,7 +27,7 @@ def state(**over) -> dict:
     s = {
         "login": "로그인됨 (테스트)", "account": "테스트", "paused_for": 0, "interval": 30.0, "min_interval": 10.0, "max_interval": 3600.0,
         "version": "1.3.1", "update": None, "notify_error": None, "setup": {"korail": True, "discord": True},
-        "update_install": {"phase": "idle", "done": 0, "total": 0, "error": None},
+        "update_install": {"phase": "idle", "done": 0, "total": 0, "error": None}, "boot": "boot-1",
         "stations": ["서울", "부산", "대전"],
         "options": {"GENERAL_FIRST": "전부 (일반실 먼저)", "GENERAL_ONLY": "일반실만", "SPECIAL_ONLY": "특실만"},
         "jobs": [], "logs": [],
@@ -299,9 +299,22 @@ def test_restart_during_update_is_not_shown_as_a_crash_and_the_page_reloads(open
     st["__down"] = True  # 옛 프로세스가 종료됐다
     expect(page.locator("#banners")).to_contain_text("다시 시작하는 중", timeout=15000)
     expect(page.locator("#banners")).not_to_contain_text("연결이 끊겼어요")  # 크래시처럼 보이면 안 된다
-    st.update(__down=False, version="9.9.9", update=None, update_install={"phase": "idle", "done": 0, "total": 0, "error": None})
+    idle = {"phase": "idle", "done": 0, "total": 0, "error": None}
+    st.update(__down=False, boot="boot-2", version="9.9.9", update=None, update_install=idle)
     page.wait_for_function("window.__marker === undefined", timeout=15000)  # 새 서버가 돌아오면 새 화면 코드를 다시 불러온다
     expect(page.locator("#app")).to_be_visible()
+
+
+def test_page_reloads_when_the_server_restarted_even_if_the_outage_was_never_seen(open_page):
+    """폴링 사이에 재시작이 끝나 끊김을 못 봤다면 '끊김 → 복구'로는 알 수 없다 — 서버 인스턴스 ID 로 안다 (astra 리뷰)."""
+    st = state()
+    page, _ = open_page(st)
+    expect(page.locator("#app")).to_be_visible()
+    page.evaluate("window.__marker = 1")
+    page.wait_for_timeout(3500)
+    assert page.evaluate("window.__marker") == 1  # 같은 서버면 새로고침하지 않는다
+    st["boot"] = "boot-2"  # 한 번도 실패하지 않았는데 다른 프로세스가 응답한다
+    page.wait_for_function("window.__marker === undefined", timeout=15000)
 
 
 def test_no_banners_when_everything_is_fine(open_page):

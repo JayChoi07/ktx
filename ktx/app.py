@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -26,6 +27,7 @@ STATIC = (Path(getattr(sys, "_MEIPASS", "")) / "ktx" / "static") if getattr(sys,
 LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 
 
+BOOT_ID = uuid.uuid4().hex  # 이 프로세스의 ID. 화면은 이 값이 바뀌면 서버가 재시작된 것으로 보고 새로고침한다
 # run.py 가 트레이 종료 함수로 바꿔 끼운다 (업데이트 뒤 재시작에 쓴다)
 exit_app: Callable[[], None] = lambda: os._exit(0)  # noqa: E731
 
@@ -129,6 +131,7 @@ def state():
         "min_interval": MIN_INTERVAL,
         "max_interval": MAX_INTERVAL,
         "version": __version__,
+        "boot": BOOT_ID,
         "update": _update_view(),
         "update_install": dict(update.install_state),
         "notify_error": monitor.notify_error,
@@ -191,7 +194,11 @@ def update_install():
     if not view["installable"]:
         raise HTTPException(409, view["why_not"])
     try:
-        started = update.start_install(lambda: exit_app())  # 호출 시점의 exit_app 을 쓴다 (run.py 가 나중에 바꿔 끼운다)
+        started = update.start_install(
+            lambda: exit_app(),  # 호출 시점의 exit_app 을 쓴다 (run.py 가 나중에 바꿔 끼운다)
+            hold=monitor.hold_for_restart,  # 교체 직전에 새 예약을 막고, 결제 대기 건이 생겼으면 재시작하지 않는다
+            release=monitor.release_restart,
+        )
     except update.UpdateError as e:
         raise HTTPException(409, str(e)) from e
     if not started:
