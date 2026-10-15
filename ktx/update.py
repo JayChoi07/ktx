@@ -186,12 +186,15 @@ def _data(value) -> str:
     return f"[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{b64}'))"
 
 
-def helper_script(pid: int, exe: Path, new: Path, old: Path, sha256: str | None = None, start: bool = True, wait: int = 60) -> str:
+def helper_script(
+    pid: int, exe: Path, new: Path, old: Path, sha256: str | None = None, start: bool = True, wait: int = 60, retries: int = 40
+) -> str:
     """이 프로세스(pid)가 끝난 뒤 exe 를 바꾸고 새 exe 를 띄우는 PowerShell.
 
     - pid 가 wait 초 안에 끝나지 않으면 아무것도 바꾸지 않고 중단한다 (옛 서버가 살아 있는데 디스크만 바뀌는 일을 막는다).
     - sha256 이 주어지면 교체 직전에 ktx-new.exe 를 다시 검증한다. 다르면 지우고 교체하지 않은 채 옛 exe 를 다시 띄운다.
-    - 이동이 실패하면 옛 exe 를 되돌린다. 어떤 경우에도 마지막에 (새 또는 옛) exe 를 띄운다.
+    - 막 끝난 프로세스의 exe 는 백신 검사 등으로 잠시 잠겨 있을 수 있어 이름 변경을 0.5초 간격으로 retries 번까지 다시 시도한다.
+      끝내 못 바꾸면 옛 exe 를 그대로 둔다. 이동이 중간에 실패하면 옛 exe 를 되돌린다. 어떤 경우에도 마지막에 (새 또는 옛) exe 를 띄운다.
     """
     if sha256 is not None and not re.fullmatch(r"[0-9a-fA-F]{64}", sha256):
         raise ValueError("sha256 형식이 올바르지 않아요")
@@ -210,14 +213,22 @@ def helper_script(pid: int, exe: Path, new: Path, old: Path, sha256: str | None 
             f"if ($h -ne '{sha256.upper()}') {{ $swap = $false; Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue }}",
         ]
     lines += [
-        "if ($swap) {",
-        "  try {",
-        "    Move-Item -LiteralPath $exe -Destination $old -Force -ErrorAction Stop",
-        "    Move-Item -LiteralPath $new -Destination $exe -Force -ErrorAction Stop",
-        "  } catch {",
-        "    if (-not (Test-Path -LiteralPath $exe) -and (Test-Path -LiteralPath $old)) "
-        "{ Move-Item -LiteralPath $old -Destination $exe -Force }",
+        "function Try-Move($from, $to) {",
+        # 재시도는 잠금용이다 — 없는 파일은 바로 포기
+        "  if (-not (Test-Path -LiteralPath $from)) { $script:why = 'missing: ' + $from; return $false }",
+        f"  for ($i = 0; $i -lt {int(retries)}; $i++) {{",
+        "    try { Move-Item -LiteralPath $from -Destination $to -Force -ErrorAction Stop; return $true }",
+        "    catch { $script:why = $_.Exception.Message; Start-Sleep -Milliseconds 500 }",
         "  }",
+        "  return $false",
+        "}",
+        "if ($swap) {",
+        "  if (Try-Move $exe $old) {",
+        "    if (-not (Try-Move $new $exe)) {",
+        "      Write-Output \"swap failed: $script:why\"",
+        "      if (-not (Test-Path -LiteralPath $exe)) { $null = Try-Move $old $exe }",
+        "    }",
+        "  } else { Write-Output \"old exe stayed locked: $script:why\" }",
         "}",
     ]
     if start:  # --updated: 새 exe 가 브라우저 탭을 또 열지 않게 한다

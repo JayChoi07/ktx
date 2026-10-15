@@ -10,6 +10,7 @@ import hashlib
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import httpx
@@ -448,7 +449,9 @@ def test_helper_script_passes_paths_as_data_not_as_script_syntax(tmp_path):
 def run_helper(script: str) -> int:
     enc = base64.b64encode(script.encode("utf-16-le")).decode()
     cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc]
-    return subprocess.run(cmd, timeout=90).returncode
+    done = subprocess.run(cmd, timeout=120, capture_output=True, text=True, errors="replace")
+    run_helper.output = (done.stdout or "") + (done.stderr or "")  # 실패했을 때 이유를 볼 수 있게 (헬퍼는 실패 사유를 출력한다)
+    return done.returncode
 
 
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="PowerShell 교체 스크립트는 Windows 전용")
@@ -468,6 +471,41 @@ def test_helper_really_swaps_files_after_the_process_exits(tmp_path):
     run_helper(update.helper_script(proc.pid, exe, new, old, sha256=sha(b"NEW-EXE").upper(), start=False))
     assert exe.read_bytes() == b"NEW-EXE" and old.exists() and not new.exists()
     assert old.stat().st_size > 10_000  # 옛 exe 는 .old 로 남는다 (새 exe 가 첫 실행에 지운다)
+
+
+@windows_only
+def test_helper_waits_out_a_brief_lock_on_the_old_exe(tmp_path):
+    """막 끝난 프로세스의 exe 는 백신 검사 등으로 잠깐 잠겨 있다 — 한 번 실패하고 포기하면 업데이트가 조용히 안 된다 (CI 에서 겪음)."""
+    exe, new, old = tmp_path / "ktx.exe", tmp_path / "ktx-new.exe", tmp_path / "ktx.old"
+    exe.write_bytes(b"OLD-EXE")
+    new.write_bytes(b"NEW-EXE")
+    done = subprocess.Popen(["cmd.exe", "/c", "exit"])
+    done.wait()
+    held = exe.open("rb")  # 이 핸들이 열려 있는 동안 Windows 는 이름 변경을 거부한다
+    release = threading.Timer(6.0, held.close)  # 헬퍼가 첫 시도를 하는 시각(PowerShell 기동 포함 2~3초)보다 충분히 길게
+    release.start()
+    try:
+        run_helper(update.helper_script(done.pid, exe, new, old, sha256=sha(b"NEW-EXE"), start=False))
+    finally:
+        release.cancel()
+        held.close()
+    assert exe.read_bytes() == b"NEW-EXE" and old.read_bytes() == b"OLD-EXE", run_helper.output
+
+
+@windows_only
+def test_helper_gives_up_cleanly_if_the_old_exe_stays_locked(tmp_path):
+    """끝내 못 바꾸면 옛 exe 를 그대로 둔 채 끝난다 (프로그램이 사라지지 않는다)."""
+    exe, new, old = tmp_path / "ktx.exe", tmp_path / "ktx-new.exe", tmp_path / "ktx.old"
+    exe.write_bytes(b"OLD-EXE")
+    new.write_bytes(b"NEW-EXE")
+    done = subprocess.Popen(["cmd.exe", "/c", "exit"])
+    done.wait()
+    held = exe.open("rb")
+    try:
+        run_helper(update.helper_script(done.pid, exe, new, old, start=False, retries=3))
+    finally:
+        held.close()
+    assert exe.read_bytes() == b"OLD-EXE" and not old.exists(), run_helper.output
 
 
 @windows_only
