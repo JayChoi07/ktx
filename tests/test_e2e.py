@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import base64
 import contextlib
 import json
 import os
@@ -31,7 +30,7 @@ BASE = f"http://localhost:{PORT}"
 ROOT = Path(__file__).resolve().parent.parent
 SHOTS = Path(os.environ.get("KTX_TEST_SHOTS", ROOT / "build" / "shots"))
 SERVICE = "ktx-macro-test"
-NAMES = ("KORAIL_ID", "KORAIL_PW", "KAKAO_REST_API_KEY", "KAKAO_CLIENT_SECRET")
+NAMES = ("KORAIL_ID", "KORAIL_PW", "DISCORD_WEBHOOK_URL")
 KID, KPW = os.environ.get("KTX_TEST_KORAIL_ID"), os.environ.get("KTX_TEST_KORAIL_PW")
 
 pytestmark = pytest.mark.skipif(not (KID and KPW), reason="KTX_TEST_KORAIL_ID / KTX_TEST_KORAIL_PW 필요")
@@ -129,22 +128,23 @@ def test_03_korail_login_succeeds(page):
     page.click("#wKorail button")
     expect(toast(page, "ok")).to_contain_text("연결됐어요", timeout=30000)
     expect(page.locator("#app")).to_be_visible()
-    expect(page.locator("#wizard")).to_contain_text("설정 코드")  # 2단계
+    expect(page.locator("#wizard")).to_contain_text("웹후크 URL")  # 2단계
     expect(page.locator("#status")).to_contain_text("님 · 코레일")
     expect(page.locator("#dep")).to_have_value("서울")
     assert state()["setup"]["korail"] is True
     assert len(state()["stations"]) > 200
-    shot(page, "03-wizard-kakao")
+    shot(page, "03-wizard-discord")
 
 
-def test_04_bad_setup_code_then_skip(page):
-    page.fill("#wCode", "this-is-not-a-code")
-    page.click("#wKakao button[type=submit], #wKakao button:not([type=button])")
-    expect(toast(page, "err")).to_contain_text("설정 코드가 올바르지 않아요")
+def test_04_bad_webhook_url_then_skip(page):
+    page.fill("#wUrl", "this-is-not-a-webhook-url")
+    page.click("#wDiscord button[type=submit], #wDiscord button:not([type=button])")
+    expect(toast(page, "err")).to_contain_text("웹후크 URL이 올바르지 않아요")
+    expect(page.locator("#wDiscord button").first).to_be_enabled()  # 다시 시도할 수 있어야 한다
     page.click("#skip")
     expect(page.locator("#wizard")).to_be_empty()
-    expect(page.locator("#banners")).to_contain_text("카톡이 연결되지 않았어요")
-    expect(page.locator("#banners button")).to_contain_text("카톡 연결하기")
+    expect(page.locator("#banners")).to_contain_text("디스코드 알림이 설정되지 않았어요")
+    expect(page.locator("#banners button")).to_contain_text("디스코드 연결하기")
     shot(page, "04-main-empty")
 
 
@@ -246,7 +246,7 @@ def test_09_settings_sheet(page):
     page.click("#gear")
     sheet = page.locator("#settings")
     expect(sheet).to_be_visible()
-    expect(sheet).to_contain_text("카카오톡 알림")
+    expect(sheet).to_contain_text("디스코드 알림")
     expect(sheet).to_contain_text("연결 안 됨")
     expect(sheet.locator("#sTest")).to_be_disabled()
     expect(sheet).to_contain_text("코레일 계정")
@@ -307,13 +307,13 @@ def test_10_delete_korail_account_returns_to_wizard(page):
     page.fill("#wPw", KPW)
     page.click("#wKorail button")
     expect(page.locator("#app")).to_be_visible(timeout=30000)
-    expect(page.locator("#wizard")).to_be_empty()  # 카카오는 이미 '나중에' 했으므로
+    expect(page.locator("#wizard")).to_be_empty()  # 디스코드는 이미 '나중에' 했으므로
     page.click("#gear")
     expect(page.locator("#settings")).to_contain_text("님")
     page.click("#closeSet")
 
 
-# ---------------------------------------------------------------- 4. 예약 카드 / 카톡 설정 코드
+# ---------------------------------------------------------------- 4. 예약 카드 / 디스코드 웹후크
 def test_11_reserved_card_and_expiry(page, data_dir):
     limit = datetime.now() + timedelta(minutes=7)
     result = {"rsv_id": "TEST-NONE", "train_key": "x", "train": "KTX 083 서울→부산 07:00~09:40", "price": 59800, "seats": [],
@@ -339,21 +339,15 @@ def test_11_reserved_card_and_expiry(page, data_dir):
     page.click("#closeSet")
 
 
-def test_12_kakao_setup_code_roundtrip():
-    r = httpx.post(f"{BASE}/api/setup/kakao", json={"rest_api_key": "testkey-1234567890", "client_secret": "sec-xyz"})
-    assert r.status_code == 200
-    assert state()["setup"]["kakao_key"] is True
-    code = httpx.get(f"{BASE}/api/setup/kakao/code").json()["code"]
-    raw = json.loads(base64.urlsafe_b64decode(code + "=" * (-len(code) % 4)))
-    assert raw == {"k": "testkey-1234567890", "s": "sec-xyz"}
-    r = httpx.get(f"{BASE}/kakao/login", follow_redirects=False)
-    assert r.status_code in (302, 307) and "client_id=testkey-1234567890" in r.headers["location"]
-    assert f"localhost%3A{PORT}%2Fkakao%2Fcallback" in r.headers["location"]
-    assert httpx.post(f"{BASE}/api/setup/kakao", json={"code": "bad"}).status_code == 400
-    assert httpx.post(f"{BASE}/api/setup/kakao", json={"code": code}).status_code == 200  # 코드로 재설정
-    assert httpx.post(f"{BASE}/api/setup/reset/kakao").status_code == 200
-    assert state()["setup"]["kakao_key"] is False
-    assert httpx.get(f"{BASE}/api/setup/kakao/code").status_code == 404
+def test_12_discord_webhook_rejects_bad_input_and_unset_test():
+    """실제 디스코드로는 보내지 않는다 — 형식이 틀린 URL 은 네트워크 호출 전에 거부돼야 한다."""
+    for bad in ("not-a-url", "https://evil.example/api/webhooks/1/abc", "http://discord.com/api/webhooks/1/abc"):
+        r = httpx.post(f"{BASE}/api/setup/discord", json={"url": bad})
+        assert r.status_code == 400 and "웹후크 URL" in r.json()["detail"]
+    assert state()["setup"]["discord"] is False
+    assert keyring.get_password(SERVICE, "DISCORD_WEBHOOK_URL") is None
+    assert httpx.post(f"{BASE}/api/discord/test").status_code == 400  # 설정 전에는 테스트 전송 불가
+    assert httpx.post(f"{BASE}/api/setup/reset/discord").status_code == 200  # 없는 항목 삭제도 성공
 
 
 # ---------------------------------------------------------------- 5. 모바일 / 연결 끊김 / 보안

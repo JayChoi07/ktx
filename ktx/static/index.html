@@ -217,7 +217,7 @@
               <div class="field"><span>인원</span><div class="stepper"><button type="button" id="minus" aria-label="인원 줄이기">−</button><output id="adults">1</output><button type="button" id="plus" aria-label="인원 늘리기">＋</button></div></div>
             </div>
             <button class="btn block" id="submit">감시 시작</button>
-            <p class="t-small">빈자리가 생기면 자동으로 예약하고 카톡으로 알려요. <b>결제는 직접</b> 코레일톡에서 해야 해요 (약 10분 안).</p>
+            <p class="t-small">빈자리가 생기면 자동으로 예약하고 디스코드로 알려요. <b>결제는 직접</b> 코레일톡에서 해야 해요 (약 10분 안).</p>
           </form>
         </details>
       </div>
@@ -319,30 +319,28 @@ function renderBanners() {
   if (failures >= 2) b.push(`<div class="banner err"><span><b>프로그램과 연결이 끊겼어요.</b> 프로그램이 종료됐다면 ktx를 다시 실행하세요. 그동안 <b>감시는 멈춰 있어요.</b></span></div>`);
   else if (S) {
     const watching = S.jobs.some(j => j.status === 'watching');
-    if (S.setup.korail && !S.setup.kakao_connected && wizardStep() === 0) b.push(`<div class="banner warn"><span><b>카톡이 연결되지 않았어요.</b> 지금은 예약이 되어도 알림이 가지 않아요.${watching ? ' 감시 중인 항목이 있어요!' : ''}</span><button class="btn small" id="bannerKakao">카톡 연결하기</button></div>`);
+    if (S.setup.korail && !S.setup.discord && wizardStep() === 0) b.push(`<div class="banner warn"><span><b>디스코드 알림이 설정되지 않았어요.</b> 지금은 예약이 되어도 알림이 가지 않아요.${watching ? ' 감시 중인 항목이 있어요!' : ''}</span><button class="btn small" id="bannerDiscord">디스코드 연결하기</button></div>`);
     if (S.paused_for) b.push(`<div class="banner err"><span><b>코레일이 접속을 제한했어요.</b> ${Math.ceil(S.paused_for/60)}분 뒤에 자동으로 다시 시도해요. VPN이 켜져 있다면 꺼 주세요.</span></div>`);
   }
   const html = b.join('');
   if (html === bannersShown) return;  // 매 폴링마다 다시 그리면 등장 애니메이션이 반복돼 깜빡인다
   bannersShown = html;
   $('banners').innerHTML = html;
-  const bk = $('bannerKakao'); if (bk) bk.onclick = () => { store.set('skipKakao', ''); wizardShown = -1; renderWizard(); renderBanners(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const bd = $('bannerDiscord'); if (bd) bd.onclick = () => { store.set('skipNotify', ''); wizardShown = -1; renderWizard(); renderBanners(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 }
 function renderStatus() {
   const k = S.setup, ok = !!S.account;
   const korail = ok ? `<span class="badge ok"><span class="dot"></span>${esc(S.account)}님 · 코레일</span>` : `<span class="badge ${k.korail ? 'err' : ''}"><span class="dot"></span>${esc(S.login)}</span>`;
-  const kakao = k.kakao_connected ? '<span class="badge ok"><span class="dot"></span>카톡 연결됨</span>' : '<span class="badge warn"><span class="dot"></span>카톡 미연결</span>';
-  $('status').innerHTML = korail + kakao;
+  const discord = k.discord ? '<span class="badge ok"><span class="dot"></span>디스코드 연결됨</span>' : '<span class="badge warn"><span class="dot"></span>디스코드 미연결</span>';
+  $('status').innerHTML = korail + discord;
 }
 
 /* ---------------- 첫 실행 마법사 ---------------- */
 function wizardStep() {
   const k = S.setup;
   if (!k.korail) return 1;
-  if (store.get('skipKakao')) return 0;
-  if (!k.kakao_key) return 2;
-  if (!k.kakao_connected) return 3;
-  return 0;
+  if (store.get('skipNotify') || k.discord) return 0;
+  return 2;
 }
 function renderWizard() {
   const step = S ? wizardStep() : 0;
@@ -350,7 +348,7 @@ function renderWizard() {
   if (step === wizardShown) return;
   wizardShown = step;
   if (!step) { $('wizard').innerHTML = ''; return; }
-  const bars = [1,2,3].map(i => `<div class="${i < step ? 'done' : i === step ? 'now' : ''}"></div>`).join('');
+  const bars = [1,2].map(i => `<div class="${i < step ? 'done' : i === step ? 'now' : ''}"></div>`).join('');
   let body = '';
   if (step === 1) body = `
     <h2 class="t-title">코레일 계정을 연결해요</h2>
@@ -361,30 +359,22 @@ function renderWizard() {
       <button class="btn">확인하고 저장</button>
     </form>`;
   if (step === 2) body = `
-    <h2 class="t-title">카톡 알림을 받을 준비를 해요</h2>
-    <p class="t-small">앱을 만든 사람에게 받은 <b>설정 코드</b>를 붙여 넣어 주세요. 예약이 되면 내 카톡으로 알려드려요.</p>
-    <form class="wiz-body" id="wKakao">
-      <label class="field"><span>설정 코드</span><input class="input" id="wCode" placeholder="전달받은 코드를 붙여넣기" required></label>
-      <button class="btn">저장</button>
+    <h2 class="t-title">디스코드 알림을 받을 준비를 해요</h2>
+    <p class="t-small">알림을 받을 디스코드 채널의 <b>웹후크 URL</b>을 붙여 넣어 주세요. 예약이 되면 그 채널로 알려드려요.<br>채널 설정 → 연동 → 웹후크 → 새 웹후크 → <b>웹후크 URL 복사</b></p>
+    <form class="wiz-body" id="wDiscord">
+      <label class="field"><span>웹후크 URL</span><input class="input" id="wUrl" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" spellcheck="false" required></label>
+      <button class="btn">확인하고 저장</button>
       <button class="btn sub" type="button" id="skip">나중에 할래요</button>
     </form>`;
-  if (step === 3) body = `
-    <h2 class="t-title">내 카카오톡을 연결해요</h2>
-    <p class="t-small">로그인한 <b>본인 카카오톡 "나와의 채팅"</b>으로 알림이 와요.</p>
-    <div class="wiz-body">
-      <a href="/kakao/login" style="text-decoration:none"><button class="btn block" type="button">카카오 계정으로 연결</button></a>
-      <button class="btn sub" type="button" id="skip">나중에 할래요</button>
-      <details class="t-small"><summary style="padding:0;font-weight:600">로그인이 안 되나요?</summary>
-        <p style="margin-top:8px">카카오 앱의 Redirect URI에 아래 주소가 등록되어 있어야 해요. 앱을 만든 사람에게 확인하세요.</p>
-        <div class="copy" style="margin-top:8px"><span>${esc(S.setup.redirect_uri)}</span></div></details>
-    </div>`;
-  $('wizard').innerHTML = `<div class="card wizard"><span class="badge pri">시작하기 ${step} / 3</span><div class="steps">${bars}</div>${body}</div>`;
+  $('wizard').innerHTML = `<div class="card wizard"><span class="badge pri">시작하기 ${step} / 2</span><div class="steps">${bars}</div>${body}</div>`;
   const on = (id, ev, fn) => $(id) && $(id).addEventListener(ev, fn);
   on('wKorail', 'submit', async e => { e.preventDefault(); const b = e.target.querySelector('button'); b.disabled = true; b.textContent = '로그인 확인 중…';
     try { const r = await api('/api/setup/korail', 'POST', { user_id: $('wId').value, password: $('wPw').value }); toast(`${r.name}님, 연결됐어요`, 'ok'); await poll(); }
     catch (err) { toast(err.message, 'err'); b.disabled = false; b.textContent = '확인하고 저장'; } });
-  on('wKakao', 'submit', async e => { e.preventDefault(); try { await api('/api/setup/kakao', 'POST', { code: $('wCode').value }); await poll(); } catch (err) { toast(err.message, 'err'); } });
-  on('skip', 'click', () => { store.set('skipKakao', '1'); wizardShown = -1; poll(); });
+  on('wDiscord', 'submit', async e => { e.preventDefault(); const b = e.target.querySelector('button'); b.disabled = true; b.textContent = '테스트 메시지 보내는 중…';
+    try { await api('/api/setup/discord', 'POST', { url: $('wUrl').value }); toast('디스코드에 확인 메시지를 보냈어요', 'ok'); await poll(); }
+    catch (err) { toast(err.message, 'err'); b.disabled = false; b.textContent = '확인하고 저장'; } });
+  on('skip', 'click', () => { store.set('skipNotify', '1'); wizardShown = -1; poll(); });
 }
 
 /* ---------------- 새 감시 폼 ---------------- */
@@ -539,12 +529,10 @@ const isPreset = v => INTERVALS.some(([p]) => p === v);
 function renderSettings() {
   const k = S.setup, ok = !!S.account;
   $('setBody').innerHTML = `
-    <div class="set"><h3>카카오톡 알림</h3><p class="t-small">예약되면 내 카카오톡 "나와의 채팅"으로 알려줘요.</p>
-      <div class="line"><span>${k.kakao_connected ? '<span class="badge ok"><span class="dot"></span>연결됨</span>' : '<span class="badge warn"><span class="dot"></span>연결 안 됨</span>'}</span>
-        <span class="row"><button class="btn sub small" id="sTest" ${k.kakao_connected ? '' : 'disabled'}>테스트 전송</button>
-        ${k.kakao_key ? '<a href="/kakao/login" style="text-decoration:none"><button class="btn sub small" type="button">' + (k.kakao_connected ? '다시 연결' : '연결하기') + '</button></a>' : ''}</span></div>
-      <div class="row">${k.kakao_key ? '<button class="btn sub small" id="sCode">설정 코드 복사 (다른 사람에게 전달)</button>' : ''}
-        <button class="btn danger small" id="sResetKakao">카카오 설정 지우기</button></div></div>
+    <div class="set"><h3>디스코드 알림</h3><p class="t-small">예약되면 설정한 디스코드 채널로 알려줘요. 예약 성공은 <b>@everyone</b>으로 울려요.</p>
+      <div class="line"><span>${k.discord ? '<span class="badge ok"><span class="dot"></span>연결됨</span>' : '<span class="badge warn"><span class="dot"></span>연결 안 됨</span>'}</span>
+        <span class="row"><button class="btn sub small" id="sTest" ${k.discord ? '' : 'disabled'}>테스트 전송</button>
+        ${k.discord ? '<button class="btn danger small" id="sResetDiscord">웹후크 지우기</button>' : '<button class="btn small" id="sLinkDiscord">웹후크 연결하기</button>'}</span></div></div>
     <div class="set"><h3>코레일 계정</h3>
       <div class="line"><span>${ok ? `<span class="badge ok"><span class="dot"></span>${esc(S.account)}님</span>` : esc(S.login)}</span>
         ${k.korail ? '<button class="btn danger small" id="sResetKorail">계정 지우기</button>' : '<button class="btn small" id="sLinkKorail">계정 연결하기</button>'}</div></div>
@@ -554,9 +542,9 @@ function renderSettings() {
       <p class="t-small" style="margin:10px 0 0">현재 ${fmtSec(S.interval)}마다 조회</p></div>
     <div class="set"><details class="logbox"><summary>활동 로그</summary><div class="log" id="logs">${logHtml()}</div></details></div>`;
   const on = (id, fn) => $(id) && ($(id).onclick = fn);
-  on('sTest', async () => { try { await api('/api/kakao/test', 'POST'); toast('보냈어요. 카톡을 확인하세요', 'ok'); } catch (e) { toast(e.message, 'err'); } });
-  on('sCode', async () => { try { const r = await api('/api/setup/kakao/code'); await navigator.clipboard.writeText(r.code); toast('설정 코드를 복사했어요. 비공개로만 전달하세요', 'ok'); } catch (e) { toast(e.message, 'err'); } });
-  on('sResetKakao', async () => { if (await ask('카카오 설정과 연결을 지울까요?', '지우기', true)) { await api('/api/setup/reset/kakao', 'POST'); store.set('skipKakao', ''); wizardShown = -1; await poll(); renderSettings(); } });
+  on('sTest', async () => { try { await api('/api/discord/test', 'POST'); toast('보냈어요. 디스코드를 확인하세요', 'ok'); } catch (e) { toast(e.message, 'err'); } });
+  on('sResetDiscord', async () => { if (await ask('저장된 디스코드 웹후크를 지울까요? 알림이 오지 않게 돼요.', '지우기', true)) { await api('/api/setup/reset/discord', 'POST'); store.set('skipNotify', ''); wizardShown = -1; await poll(); renderSettings(); } });
+  on('sLinkDiscord', () => { $('settings').close(); store.set('skipNotify', ''); wizardShown = -1; poll().then(() => $('wizard').scrollIntoView({ behavior: 'smooth', block: 'start' })); });
   on('sLinkKorail', () => { $('settings').close(); wizardShown = -1; poll().then(() => $('wizard').scrollIntoView({ behavior: 'smooth', block: 'start' })); });
   on('sResetKorail', async () => { if (await ask('저장된 코레일 계정을 지울까요? 감시는 멈춰요.', '지우기', true)) { await api('/api/setup/reset/korail', 'POST'); $('settings').close(); wizardShown = -1; formReady = false; poll(); } });
   const applyInterval = async sec => { try { await api('/api/settings', 'POST', { interval: sec }); toast(`조회 간격을 ${fmtSec(sec)}로 바꿨어요`, 'ok'); await poll(); renderSettings(); } catch (err) { toast(err.message, 'err'); } };
@@ -569,10 +557,6 @@ $('gear').onclick = openSettings; $('status').onclick = openSettings; $('closeSe
 $('settings').addEventListener('click', e => { if (e.target === $('settings')) $('settings').close(); });
 $('newBtn').onclick = () => { $('formBox').open = true; $('formBox').scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 
-const q = new URLSearchParams(location.search);
-if (q.get('kakao') === 'ok') { store.set('skipKakao', ''); toast('카카오톡이 연결됐어요', 'ok'); }
-if (q.get('kakao_error')) toast('카카오 연결 실패: ' + q.get('kakao_error'), 'err');
-if (q.size) history.replaceState(null, '', '/');
 poll(); setInterval(poll, 3000);
 </script>
 </body>

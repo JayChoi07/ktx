@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import base64
-import json
 import logging
 import sys
 import time
@@ -12,10 +10,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from . import config, kakao
+from . import config, discord
 from .monitor import MAX_INTERVAL, MIN_INTERVAL, OPTIONS, TRAIN_TYPES, Monitor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -84,12 +82,7 @@ def state():
         "interval": monitor.settings["interval"],
         "min_interval": MIN_INTERVAL,
         "max_interval": MAX_INTERVAL,
-        "setup": {
-            "korail": korail_set,
-            "kakao_key": kakao.configured(),
-            "kakao_connected": kakao.connected(),
-            "redirect_uri": kakao.redirect_uri(),
-        },
+        "setup": {"korail": korail_set, "discord": discord.configured()},
         "stations": monitor.stations(),
         "options": OPTIONS,
         "jobs": monitor.jobs.all(),
@@ -162,41 +155,20 @@ def setup_korail(body: KorailIn):
     return {"name": name}
 
 
-class KakaoKeyIn(BaseModel):
-    rest_api_key: str = ""
-    client_secret: str = ""
-    code: str = ""  # 앱 만든 사람이 건네준 '설정 코드' (키+시크릿을 하나로 묶은 것)
+class DiscordIn(BaseModel):
+    url: str = Field(min_length=1)
 
 
-def _decode_code(code: str) -> tuple[str, str]:
+@app.post("/api/setup/discord")
+def setup_discord(body: DiscordIn):
+    """웹훅 URL 로 확인 메시지를 보내 보고, 성공하면 저장한다. 실패 시 안내문과 함께 400."""
     try:
-        raw = json.loads(base64.urlsafe_b64decode(code.strip() + "=" * (-len(code.strip()) % 4)))
-        return str(raw["k"]), str(raw.get("s", ""))
-    except Exception:
-        raise HTTPException(400, "설정 코드가 올바르지 않아요. 전달받은 코드를 그대로 붙여 넣어 주세요.") from None
-
-
-@app.get("/api/setup/kakao/code")
-def kakao_code():
-    """다른 사람에게 줄 설정 코드. 내 PC(localhost)에서만 호출 가능."""
-    key = config.get("KAKAO_REST_API_KEY")
-    if not key:
-        raise HTTPException(404, "카카오 키가 설정되어 있지 않아요")
-    raw = json.dumps({"k": key, "s": config.get("KAKAO_CLIENT_SECRET") or ""}).encode()
-    return {"code": base64.urlsafe_b64encode(raw).decode().rstrip("=")}
-
-
-@app.post("/api/setup/kakao")
-def setup_kakao(body: KakaoKeyIn):
-    key, secret = (_decode_code(body.code) if body.code.strip() else (body.rest_api_key.strip(), body.client_secret.strip()))
-    if len(key) < 10:
-        raise HTTPException(400, "카카오 REST API 키를 입력해 주세요")
-    config.put("KAKAO_REST_API_KEY", key)
-    if secret:
-        config.put("KAKAO_CLIENT_SECRET", secret)
-    else:
-        config.remove("KAKAO_CLIENT_SECRET")
-    kakao.disconnect()  # 키가 바뀌면 이전 토큰은 무효
+        url = discord.normalize(body.url)
+        discord.send("[KTX] 디스코드 알림이 연결됐어요. 예약이 되면 이 채널로 알려드릴게요.", url=url)
+    except Exception as e:
+        raise HTTPException(400, str(e)) from e
+    config.put(discord.KEY, url)
+    monitor.say("디스코드 알림 연결 완료", "ok")
     return {"ok": True}
 
 
@@ -204,40 +176,17 @@ def setup_kakao(body: KakaoKeyIn):
 def setup_reset(what: str):
     if what == "korail":
         monitor.forget_korail()
-    elif what == "kakao":
-        config.remove("KAKAO_REST_API_KEY", "KAKAO_CLIENT_SECRET")
-        kakao.disconnect()
+    elif what == "discord":
+        config.remove(discord.KEY)
     else:
         raise HTTPException(404)
     return {"ok": True}
 
 
-# ---------- 카카오 ----------
-@app.get("/kakao/login")
-def kakao_login():
-    if not kakao.configured():
-        raise HTTPException(400, "카카오 REST API 키를 먼저 설정하세요")
-    return RedirectResponse(kakao.login_url())
-
-
-@app.get("/kakao/callback")
-def kakao_callback(code: str | None = None, error: str | None = None, error_description: str | None = None):
-    if error or not code:
-        monitor.say(f"카카오 인증 실패: {error_description or error}", "error")
-        return RedirectResponse(f"/?kakao_error={error_description or error or 'unknown'}")
+@app.post("/api/discord/test")
+def discord_test():
     try:
-        kakao.exchange_code(code)
-    except Exception as e:
-        monitor.say(str(e), "error")
-        return RedirectResponse(f"/?kakao_error={e}")
-    monitor.say("카카오톡 연결 완료", "ok")
-    return RedirectResponse("/?kakao=ok")
-
-
-@app.post("/api/kakao/test")
-def kakao_test():
-    try:
-        kakao.send("[KTX] 테스트 알림입니다. 이 메시지가 보이면 연결 성공!")
+        discord.send("[KTX] 테스트 알림입니다. 이 메시지가 보이면 연결 성공!")
     except Exception as e:
         raise HTTPException(400, str(e)) from e
     return {"ok": True}

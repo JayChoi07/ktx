@@ -1,4 +1,4 @@
-"""백그라운드 감시 루프: 매진 열차를 조회하다가 자리가 나면 예약하고 카톡으로 알린다."""
+"""백그라운드 감시 루프: 매진 열차를 조회하다가 자리가 나면 예약하고 디스코드로 알린다."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from pykorail.exceptions import (
     SoldOutError,
 )
 
-from . import config, kakao, store
+from . import config, discord, store
 
 log = logging.getLogger("ktx")
 
@@ -109,14 +109,18 @@ class Monitor:
         self.logs.appendleft({"t": datetime.now().strftime("%m/%d %H:%M:%S"), "level": level, "msg": msg})
         log.log(logging.WARNING if level in ("warn", "error") else logging.INFO, msg)
 
-    def notify(self, text: str) -> None:
-        if not kakao.connected():
-            self.say(f"[카톡 미연결] {text}", "warn")
+    def notify(self, text: str, urgent: bool = False) -> None:
+        """디스코드 채널로 알린다. urgent 면 @everyone 으로 폰 푸시를 확실히 울린다."""
+        if not discord.configured():
+            self.say(f"[디스코드 미설정] {text}", "warn")
             return
+        # 한 채널을 여러 사람이 쓸 수 있어 누구 건지 붙인다: [KTX 예약 성공] → [KTX 예약 성공 · 이름]
+        if (name := self.account) and text.startswith("["):
+            text = text.replace("]", f" · {name}]", 1)
         try:
-            kakao.send(text)
+            discord.send(text, mention_everyone=urgent)
         except Exception as e:  # 알림 실패가 예약 흐름을 막으면 안 된다
-            self.say(f"카톡 전송 실패: {e}", "error")
+            self.say(f"디스코드 전송 실패: {e}", "error")
 
     def wake(self) -> None:
         self._wake.set()
@@ -312,7 +316,8 @@ class Monitor:
             self.say(f"예약 성공! {result['train']}", "ok")
             self.notify(
                 f"[KTX 예약 성공]\n{result['train']}\n{job['date']} · {result['price']:,}원\n"
-                f"결제기한 {result['buy_limit']} — 코레일톡에서 결제하세요!"
+                f"결제기한 {result['buy_limit']} — 코레일톡에서 결제하세요!",
+                urgent=True,
             )
             return
 

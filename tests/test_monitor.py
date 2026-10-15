@@ -84,13 +84,19 @@ class FakeKorail:
 @pytest.fixture
 def mon(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(m.kakao, "connected", lambda: False)
+    monkeypatch.setattr(m.discord, "configured", lambda: False)
     monkeypatch.setattr(m.time, "sleep", lambda s: None)
     mon = m.Monitor()
     mon.korail = FakeKorail()
     mon.login_state = "로그인됨 (테스트)"
-    mon.sent = []
-    monkeypatch.setattr(mon, "notify", lambda text: mon.sent.append(text))
+    mon.sent, mon.urgent = [], []
+
+    def fake_notify(text, urgent=False):
+        mon.sent.append(text)
+        if urgent:
+            mon.urgent.append(text)
+
+    monkeypatch.setattr(mon, "notify", fake_notify)
     return mon
 
 
@@ -115,6 +121,7 @@ def test_reserves_first_train_with_seat_and_notifies(mon):
     assert r["result"]["train"] == "KTX 083 서울→부산 07:30~09:30" and r["result"]["price"] == 59800
     assert r["result"]["buy_limit_iso"] == f"{TOMORROW}T23:45:00"
     assert mon.sent and "[KTX 예약 성공]" in mon.sent[0] and "59,800원" in mon.sent[0]
+    assert mon.urgent == [mon.sent[0]]  # 예약 성공만 @everyone 으로 울린다
 
 
 def test_general_only_ignores_special_seats(mon):
@@ -194,6 +201,7 @@ def test_remind_renotifies_only_after_interval(mon, monkeypatch):
     mon._reminders[j["id"]] = time.time() - m.REMIND_EVERY - 1
     mon._remind([job(mon, j["id"])])
     assert len(mon.sent) == sent_before + 1 and "[KTX 결제 대기]" in mon.sent[-1]
+    assert mon.urgent == [mon.sent[0]]  # 재알림은 멘션 없이
     assert job(mon, j["id"])["status"] == "reserved"
 
 
@@ -245,6 +253,48 @@ def test_tick_is_noop_while_paused(mon):
     mon.korail.trains.result = [FakeTrain("0700", general=True)]
     mon._tick()
     assert not mon.korail.reservations.created
+
+
+# ---------------------------------------------------------------- 디스코드 알림
+@pytest.fixture
+def real_notify(tmp_path, monkeypatch):
+    """notify 를 가로채지 않는 모니터. 디스코드 전송만 기록한다."""
+    monkeypatch.setattr(store, "DATA_DIR", tmp_path)
+    mon = m.Monitor()
+    mon.korail = FakeKorail()
+    mon.login_state = "로그인됨 (테스트)"
+    mon.posts = []
+    monkeypatch.setattr(m.discord, "configured", lambda: True)
+    monkeypatch.setattr(m.discord, "send", lambda text, mention_everyone=False: mon.posts.append((text, mention_everyone)))
+    return mon
+
+
+def test_notify_tags_account_name_inside_the_bracket(real_notify):
+    real_notify.notify("[KTX 예약 성공]\n본문", urgent=True)
+    real_notify.notify("[KTX] 안내")
+    assert real_notify.posts == [("[KTX 예약 성공 · 테스트]\n본문", True), ("[KTX · 테스트] 안내", False)]
+
+
+def test_notify_without_login_has_no_name_tag(real_notify):
+    real_notify.login_state = "로그인 실패"
+    real_notify.notify("[KTX] 로그인 실패")
+    assert real_notify.posts == [("[KTX] 로그인 실패", False)]
+
+
+def test_notify_when_not_configured_only_logs(real_notify, monkeypatch):
+    monkeypatch.setattr(m.discord, "configured", lambda: False)
+    real_notify.notify("[KTX 예약 성공]", urgent=True)
+    assert real_notify.posts == []
+    assert any("디스코드 미설정" in e["msg"] and e["level"] == "warn" for e in real_notify.logs)
+
+
+def test_notify_failure_is_logged_not_raised(real_notify, monkeypatch):
+    def boom(text, mention_everyone=False):
+        raise RuntimeError("디스코드 전송 실패 (429): rate limited")
+
+    monkeypatch.setattr(m.discord, "send", boom)
+    real_notify.notify("[KTX 예약 성공]", urgent=True)  # 알림이 실패해도 예약 흐름은 계속돼야 한다
+    assert any("디스코드 전송 실패" in e["msg"] and e["level"] == "error" for e in real_notify.logs)
 
 
 # ---------------------------------------------------------------- 안내문 / 저장소
