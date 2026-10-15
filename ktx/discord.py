@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+import time
 
 import httpx
 
@@ -30,6 +31,13 @@ def normalize(url: str) -> str:
     return url
 
 
+def _retry_after(r: httpx.Response) -> float:
+    try:
+        return float(r.json()["retry_after"])
+    except Exception:  # 본문이 JSON 이 아니거나 필드가 없으면 1초
+        return 1.0
+
+
 def send(text: str, *, mention_everyone: bool = False, url: str | None = None) -> None:
     """채널에 메시지를 보낸다. 실패하면 예외를 던진다 (호출자가 로그로 남긴다).
 
@@ -40,10 +48,10 @@ def send(text: str, *, mention_everyone: bool = False, url: str | None = None) -
     if not url:
         raise RuntimeError("디스코드 웹후크가 설정되지 않았어요")
     content = f"@everyone {text}" if mention_everyone else text
-    r = httpx.post(
-        url,
-        json={"content": content[:MAX_LEN], "allowed_mentions": {"parse": ["everyone"] if mention_everyone else []}},
-        timeout=10,
-    )
+    body = {"content": content[:MAX_LEN], "allowed_mentions": {"parse": ["everyone"] if mention_everyone else []}}
+    r = httpx.post(url, json=body, timeout=10)
+    if r.status_code == 429:  # 속도 제한: 알려 준 시간(최대 5초)만 기다렸다 한 번만 다시 보낸다
+        time.sleep(min(_retry_after(r), 5))
+        r = httpx.post(url, json=body, timeout=10)
     if r.is_error:  # 디스코드의 에러 코드/설명을 그대로 보여줘야 원인을 알 수 있다 (예: 10015 Unknown Webhook)
         raise RuntimeError(f"디스코드 전송 실패 ({r.status_code}): {r.text}")

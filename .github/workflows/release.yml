@@ -15,6 +15,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
+      - name: 태그에서 버전을 읽어 앱에 심는다 (v1.4.0 → 1.4.0). 앱이 새 릴리스와 비교하는 기준이다
+        shell: bash
+        run: |
+          echo "__version__ = \"${GITHUB_REF_NAME#v}\"" > ktx/_version.py
+          cat ktx/_version.py
       - run: uv run pyinstaller ktx.spec --noconfirm --log-level WARN
       - uses: softprops/action-gh-release@v2
         with:

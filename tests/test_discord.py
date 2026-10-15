@@ -13,9 +13,14 @@ URL = "https://discord.com/api/webhooks/123456789012345678/abcDEF_ghi-JKL0123456
 
 
 class FakeResponse:
-    def __init__(self, status=204, text=""):
-        self.status_code, self.text = status, text
+    def __init__(self, status=204, text="", body=None):
+        self.status_code, self.text, self._body = status, text, body
         self.is_error = status >= 400
+
+    def json(self):
+        if self._body is None:
+            raise ValueError("no json")
+        return self._body
 
 
 @pytest.fixture
@@ -88,6 +93,34 @@ def test_send_error_includes_status_and_reason(monkeypatch):
     monkeypatch.setattr(discord.httpx, "post", lambda url, **kw: FakeResponse(404, '{"message": "Unknown Webhook", "code": 10015}'))
     with pytest.raises(RuntimeError, match=r"404.*Unknown Webhook"):
         discord.send("x", url=URL)
+
+
+def test_send_retries_once_after_rate_limit(monkeypatch):
+    replies = [FakeResponse(429, "{}", {"retry_after": 0.7}), FakeResponse(204)]
+    waited = []
+    monkeypatch.setattr(discord.httpx, "post", lambda url, **kw: replies.pop(0))
+    monkeypatch.setattr(discord.time, "sleep", waited.append)
+    discord.send("x", url=URL)  # 속도 제한(429)은 알려 준 시간만큼 기다렸다 한 번 다시 보낸다
+    assert waited == [0.7] and replies == []
+
+
+def test_send_gives_up_after_a_second_rate_limit_and_caps_the_wait(monkeypatch):
+    replies = [FakeResponse(429, "limited", {"retry_after": 120}), FakeResponse(429, "limited again", {"retry_after": 120})]
+    waited = []
+    monkeypatch.setattr(discord.httpx, "post", lambda url, **kw: replies.pop(0))
+    monkeypatch.setattr(discord.time, "sleep", waited.append)
+    with pytest.raises(RuntimeError, match=r"429.*limited again"):
+        discord.send("x", url=URL)
+    assert waited == [5]  # 감시 루프를 오래 붙잡지 않도록 대기는 최대 5초
+
+
+def test_send_rate_limit_without_a_readable_body_waits_one_second(monkeypatch):
+    replies = [FakeResponse(429, "<html>"), FakeResponse(204)]
+    waited = []
+    monkeypatch.setattr(discord.httpx, "post", lambda url, **kw: replies.pop(0))
+    monkeypatch.setattr(discord.time, "sleep", waited.append)
+    discord.send("x", url=URL)
+    assert waited == [1.0]
 
 
 def test_send_uses_saved_url_and_fails_when_missing(posted, monkeypatch):

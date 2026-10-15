@@ -1,6 +1,6 @@
 name: ci
 
-# 푸시/PR 마다 린트 + 단위 테스트. (E2E 는 코레일 실계정이 필요해 로컬에서만 돈다)
+# 푸시/PR 마다 린트 + 단위 테스트 + 화면(UI) 테스트. (E2E 는 코레일 실계정이 필요해 로컬에서만 돈다)
 on:
   push:
     branches: [main]
@@ -13,5 +13,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
+      - run: uv run playwright install chromium  # tests/test_ui.py (서버·코레일 없이 화면만 검증)
       - run: uv run ruff check ktx run.py tests
       - run: uv run pytest -v -p no:cacheprovider

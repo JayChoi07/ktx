@@ -31,7 +31,10 @@ MIN_INTERVAL = 10.0  # 이보다 빠르게 조회하면 계정 정지 위험
 MAX_INTERVAL = 3600.0
 DEFAULT_INTERVAL = 30.0
 BLOCK_PAUSE = 600  # 이용제한 감지 시 쉬는 시간(초)
+BLOCK_REPEAT = 3600  # 접속 제한이 이어질 때 "아직 막혀 있다"를 다시 알리는 간격(초)
 REMIND_EVERY = 120  # 결제 재알림 간격(초)
+MAX_SEARCH_PAGES = 10  # 한 번의 조회에서 이어 받는 최대 쪽 수 (쪽마다 요청이 한 번 나간다)
+MAX_AUTO_RESUMES = 2  # 결제기한 만료 뒤 감시를 자동으로 다시 시작하는 최대 횟수
 # *_FIRST 는 선호하는 쪽이 없으면 다른 쪽 좌석이라도 잡는다 ("전부"). *_ONLY 는 그 등급만.
 OPTIONS = {
     "GENERAL_FIRST": "전부 (일반실 먼저)",
@@ -101,6 +104,8 @@ class Monitor:
         self._stations: list[str] = []
         self._reminders: dict[str, float] = {}
         self._block_pinged = False  # 접속 제한이 이어지는 동안 @everyone 은 첫 알림에만 쓴다
+        self._block_notified_at = 0.0
+        self.notify_error: str | None = None  # 마지막 디스코드 전송이 실패했다면 그 이유 (화면에 보여준다)
 
     # ---------- 공개 ----------
     def start(self) -> None:
@@ -120,7 +125,9 @@ class Monitor:
             text = text.replace("]", f" · {name}]", 1)
         try:
             discord.send(text, mention_everyone=urgent)
+            self.notify_error = None
         except Exception as e:  # 알림 실패가 예약 흐름을 막으면 안 된다
+            self.notify_error = str(e)
             self.say(f"디스코드 전송 실패: {e}", "error")
 
     def wake(self) -> None:
@@ -181,8 +188,11 @@ class Monitor:
     def _blocked(self, e: Exception) -> None:
         self.paused_until = time.time() + BLOCK_PAUSE
         self.say(f"{friendly(e)} ({BLOCK_PAUSE // 60}분 쉬었다가 다시 시도합니다)", "error")
-        first, self._block_pinged = not self._block_pinged, True  # 계속 막혀 있으면 10분마다 또 울리지 않게
-        self.notify(f"[KTX] 코레일 접속 제한 감지 — {BLOCK_PAUSE // 60}분 쉽니다. VPN을 껐는지 확인하세요.", urgent=first)
+        # 계속 막혀 있어도 10분마다 같은 알림을 보내지 않는다: 첫 알림만 @everyone, 이후엔 BLOCK_REPEAT 마다 멘션 없이
+        first = not self._block_pinged
+        if first or time.time() - self._block_notified_at >= BLOCK_REPEAT:
+            self._block_pinged, self._block_notified_at = True, time.time()
+            self.notify(f"[KTX] 코레일 접속 제한 감지 — {BLOCK_PAUSE // 60}분 쉽니다. VPN을 껐는지 확인하세요.", urgent=first)
 
     @property
     def account(self) -> str | None:
@@ -255,11 +265,10 @@ class Monitor:
 
     def _check_group(self, dep: str, arr: str, date: str, ttype: str, jobs: list[dict]) -> None:
         earliest = min(j["time_from"] for j in jobs)
+        latest = max(j["time_to"] for j in jobs).replace(":", "")
         start = max(datetime.strptime(f"{date} {earliest}", "%Y-%m-%d %H:%M"), datetime.now())
         try:
-            trains = self.korail.trains.search(
-                dep, arr, depart_after=start, train_type=TRAIN_TYPES.get(ttype, "100"), include_no_seats=True, max_pages=3
-            )
+            trains = self._search(dep, arr, start, date.replace("-", ""), latest, TRAIN_TYPES.get(ttype, "100"))
         except NoResultsError:
             trains = []
         except PastDepartureError:
@@ -281,6 +290,40 @@ class Monitor:
             )
             self._try_reserve(job, trains)
 
+    def _search(self, dep: str, arr: str, start: datetime, ymd: str, until: str, train_type: str) -> list:
+        """start 이후 열차를 감시 창의 끝(until, 'HHMM')에 닿을 때까지 한 쪽씩 이어 받는다 (최대 MAX_SEARCH_PAGES).
+
+        pykorail 의 max_pages 는 시각과 무관하게 쪽 수만 봐서(쪽당 약 10편) 종일 감시는 앞쪽 30편에서 잘렸다.
+        그래서 한 쪽씩 받고, 마지막 열차의 출발 시각을 다음 조회의 시작으로 삼는다 (pykorail 의 쪽 이어받기와 같은 방식).
+        좁은 시간대는 한 쪽으로 끝나 예전(항상 3쪽)보다 요청이 줄어든다.
+        """
+        found: dict[tuple, object] = {}
+        cursor = start
+        for i in range(MAX_SEARCH_PAGES):
+            if i:
+                time.sleep(random.uniform(0.3, 0.8))  # 쪽 사이를 띄워 한꺼번에 몰아치지 않는다
+            try:
+                page = self.korail.trains.search(dep, arr, depart_after=cursor, train_type=train_type, include_no_seats=True, max_pages=1)
+            except NoResultsError:
+                if not found:
+                    raise
+                break
+            fresh = {k: t for t in page if (k := (t.dep_date, t.dep_time, t.train_no)) not in found}  # 경계 열차는 다음 쪽에 또 나온다
+            if not fresh:
+                break
+            found.update(fresh)
+            last = page[-1]
+            if last.dep_date != ymd or last.dep_time[:4] >= until:
+                break
+            following = datetime.strptime(last.dep_date + last.dep_time[:4], "%Y%m%d%H%M")
+            if following <= cursor:
+                break
+            cursor = following
+        return list(found.values())
+
+    def _is_watching(self, job_id: str) -> bool:
+        return any(j["id"] == job_id and j["status"] == "watching" for j in self.jobs.all())
+
     def _try_reserve(self, job: dict, trains: list) -> None:
         ymd = job["date"].replace("-", "")
         want_from, want_to = job["time_from"].replace(":", ""), job["time_to"].replace(":", "")
@@ -291,6 +334,8 @@ class Monitor:
             key = f"{t.dep_date}-{t.train_no}"
             if key in taken or not _has_seat(t, job["option"]):
                 continue
+            if not self._is_watching(job["id"]):  # 조회하는 사이 사용자가 중지·삭제했다 (job 은 그 전의 스냅샷)
+                return
             self.say(f"빈자리 발견: {t.summary()} → 예약 시도")
             try:
                 rsv = self.korail.reservations.create(t, passengers=[AdultPassenger(job["adults"])], option=job["option"])
@@ -315,7 +360,14 @@ class Monitor:
                 "buy_limit_iso": datetime.strptime(rsv.buy_limit_date + rsv.buy_limit_time[:4], "%Y%m%d%H%M").isoformat(),
                 "seats": [str(s) for s in rsv.seats],
             }
-            self.jobs.update(job["id"], status="reserved", result=result)
+            if self.jobs.update(job["id"], status="reserved", result=result) is None:
+                # 예약이 나가는 사이 사용자가 작업을 삭제했다 — 추적할 수 없는 예약이 남지 않게 바로 취소한다
+                self.say(f"삭제된 감시의 예약이라 바로 취소합니다: {result['train']}", "warn")
+                try:
+                    self.korail.reservations.cancel(rsv)
+                except Exception as e:
+                    self.say(f"예약 취소 오류 (결제기한이 지나면 자동으로 사라져요): {e}", "warn")
+                return
             self._reminders[job["id"]] = time.time()
             self.say(f"예약 성공! {result['train']}", "ok")
             self.notify(
@@ -348,11 +400,59 @@ class Monitor:
                 self.say(f"예약 확인 오류: {e}", "warn")
                 continue
             if still is None:
-                self.jobs.update(j["id"], status="done")
-                self.say(f"예약 {r['rsv_id']} 이(가) 목록에서 사라짐 (결제 완료 또는 기한 만료)")
-                self.notify(f"[KTX] {r['train']} 예약이 목록에서 사라졌습니다. 결제했다면 OK, 아니면 기한 만료입니다.")
+                self._reservation_gone(j, r)
             else:
                 self.notify(f"[KTX 결제 대기] {r['train']}\n결제기한 {r['buy_limit']}")
+
+    def _finish(self, job: dict, text: str) -> None:
+        self.jobs.update(job["id"], status="done")
+        self._reminders.pop(job["id"], None)
+        self.notify(text)
+
+    def _reservation_gone(self, job: dict, r: dict) -> None:
+        """예약이 코레일 목록에서 사라졌다. 기한 안이면 결제, 기한 뒤면 발권 내역으로 결제/만료를 가른다.
+
+        만료로 확정되면 같은 조건으로 감시를 다시 시작한다 (최대 MAX_AUTO_RESUMES 번).
+        기한 직전에 결제하고 기한 뒤에 확인한 경우를 만료로 오인하지 않으려고 승차권 내역을 확인하며,
+        확인하지 못하면 결제했을 수도 있으므로 다시 잡지 않는다.
+        """
+        self.say(f"예약 {r['rsv_id']} 이(가) 목록에서 사라짐")
+        limit = r.get("buy_limit_iso")
+        if not (limit and datetime.now() >= datetime.fromisoformat(limit)):
+            self._finish(
+                job,
+                f"[KTX] {r['train']} 예약이 목록에서 사라졌어요. 결제기한 안이라 결제를 마친 것으로 보여요. "
+                "(앱에서 직접 취소했다면 무시하세요)",
+            )
+            return
+        try:
+            paid = any(t.pnr_no == r["rsv_id"] for t in self.korail.tickets.all())
+        except Exception as e:
+            self.say(f"발권 내역 확인 오류: {e}", "warn")
+            self._finish(
+                job,
+                f"[KTX] {r['train']} 예약이 사라졌지만 결제 여부를 확인하지 못해 감시를 다시 시작하지 않았어요. "
+                "결제하지 않았다면 '다시 감시'를 눌러 주세요.",
+            )
+            return
+        if paid:
+            self._finish(job, f"[KTX] {r['train']} 결제 완료를 확인했어요.")
+            return
+        resumes = job.get("resumes", 0)
+        if resumes >= MAX_AUTO_RESUMES:
+            self._finish(
+                job,
+                f"[KTX] {r['train']} 결제기한이 지나 예약이 만료됐어요. 이미 {MAX_AUTO_RESUMES}번 다시 잡았기 때문에 감시를 종료합니다. "
+                "계속하려면 '다시 감시'를 눌러 주세요.",
+            )
+            return
+        self.jobs.update(job["id"], status="watching", result=None, resumes=resumes + 1)
+        self._reminders.pop(job["id"], None)
+        self.say(f"결제기한이 지나 만료 — 감시를 다시 시작합니다 ({resumes + 1}/{MAX_AUTO_RESUMES})", "warn")
+        self.notify(
+            f"[KTX] {r['train']} 결제기한이 지나 예약이 만료됐어요. "
+            f"같은 조건으로 감시를 다시 시작합니다. ({resumes + 1}/{MAX_AUTO_RESUMES})"
+        )
 
     def cancel_reservation(self, job_id: str) -> None:
         job = next((j for j in self.jobs.all() if j["id"] == job_id), None)

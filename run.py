@@ -12,6 +12,7 @@ import socket
 import sys
 import threading
 import webbrowser
+from logging.handlers import RotatingFileHandler
 
 PORT = int(os.environ.get("KTX_PORT", "8000"))
 URL = f"http://localhost:{PORT}"
@@ -35,9 +36,10 @@ def _setup_file_logging() -> None:
 
     log = store.DATA_DIR / "ktx.log"
     log.parent.mkdir(parents=True, exist_ok=True)
-    handler = logging.FileHandler(log, encoding="utf-8")
+    handler = RotatingFileHandler(log, maxBytes=1_000_000, backupCount=3, encoding="utf-8")  # 최대 약 4MB
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     logging.basicConfig(level=logging.WARNING, handlers=[handler], force=True)
+    logging.getLogger("ktx").setLevel(logging.INFO)  # 로그인·예약 같은 감시 이력도 남긴다 (다른 라이브러리는 WARNING 이상만)
     if sys.stdout is None:
         sys.stdout = open(log, "a", encoding="utf-8", buffering=1)  # noqa: SIM115 — 프로세스 수명 동안 유지
     if sys.stderr is None:

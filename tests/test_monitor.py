@@ -71,11 +71,45 @@ class FakeTrains:
         return self.result
 
 
+class FakeTicket:
+    def __init__(self, pnr_no):
+        self.pnr_no = pnr_no
+
+
+class FakeTickets:
+    """발권된 승차권 내역 (korail.tickets)."""
+
+    def __init__(self):
+        self.items, self.error = [], None
+
+    def all(self):
+        if self.error:
+            raise self.error
+        return self.items
+
+
+class PagedTrains:
+    """depart_after 이후 열차를 10편씩 돌려주는 가짜 시간표. 경계 열차가 다음 쪽에 또 나오는 것도 실제 pykorail 과 같다."""
+
+    def __init__(self, minutes):
+        self.all = [FakeTrain(f"{m // 60:02d}{m % 60:02d}", no=f"{i:03d}") for i, m in enumerate(minutes)]
+        self.calls = []
+
+    def search(self, dep, arr, depart_after=None, max_pages=1, **kw):
+        assert max_pages == 1  # 쪽 수는 우리가 시각 기준으로 직접 이어 받는다
+        self.calls.append(depart_after)
+        after = depart_after.strftime("%H%M")
+        page = [t for t in self.all if t.dep_time >= after][:10]
+        if not page:
+            raise NoResultsError()
+        return page
+
+
 class FakeKorail:
     name = "테스트"
 
     def __init__(self):
-        self.reservations, self.trains = FakeReservations(), FakeTrains()
+        self.reservations, self.trains, self.tickets = FakeReservations(), FakeTrains(), FakeTickets()
 
     def close(self):
         pass
@@ -174,10 +208,13 @@ def test_access_restricted_pauses_and_warns(mon):
     assert any("접속 제한" in t for t in mon.urgent)  # 감시가 멈춘 걸 놓치지 않도록 @everyone
 
 
-def test_block_pings_everyone_only_once_per_episode(mon):
+def test_block_alerts_are_not_repeated_every_pause(mon):
     e = AccessRestrictedError(403, "이용제한", "-2000")
     mon._blocked(e)
-    mon._blocked(e)  # 10분 뒤에도 계속 막혀 있는 경우: 알림은 가되 또 울리지는 않는다
+    mon._blocked(e)  # 10분 뒤에도 계속 막혀 있어도 같은 알림을 또 보내지 않는다
+    assert len(mon.sent) == 1 and len(mon.urgent) == 1
+    mon._block_notified_at -= m.BLOCK_REPEAT  # 1시간이 지나면 아직 막혀 있다고 한 번 더 알린다 (멘션 없이)
+    mon._blocked(e)
     assert len(mon.sent) == 2 and len(mon.urgent) == 1
     # 정상 조회가 한 번 되면 에피소드가 끝나고, 다음 제한은 다시 울린다
     mon.paused_until = 0
@@ -185,7 +222,7 @@ def test_block_pings_everyone_only_once_per_episode(mon):
     mon.korail.trains.result = NoResultsError()
     mon._check_group("서울", "부산", TOMORROW, "KTX", [j])
     mon._blocked(e)
-    assert len(mon.urgent) == 2
+    assert len(mon.sent) == 3 and len(mon.urgent) == 2
 
 
 def test_login_failure_pauses_for_an_hour_and_pings_everyone(mon, monkeypatch):
@@ -213,6 +250,68 @@ def test_other_korail_error_is_logged_and_continues(mon):
     mon._try_reserve(j, [FakeTrain("0700", general=True), FakeTrain("0730", general=True)])
     assert len(mon.korail.reservations.created) == 1
     assert any("예약 거부" in entry["msg"] for entry in mon.logs)
+
+
+# ---------------------------------------------------------------- 조회 범위 (감시 창 끝까지)
+def _every_20_min():
+    return [h * 60 + m for h in range(5, 24) for m in (0, 20, 40)]  # 05:00 ~ 23:40, 57편
+
+
+def test_search_pages_until_the_window_end_not_a_fixed_page_count(mon):
+    """종일 감시가 앞쪽 30편에서 잘려 오후·저녁 열차를 못 보던 버그."""
+    mon.korail.trains = PagedTrains(_every_20_min())
+    j = add_job(mon, time_from="00:00", time_to="23:59")
+    mon._check_group("서울", "부산", TOMORROW, "KTX", [j])
+    snap = job(mon, j["id"])["trains"]
+    assert len(snap) == 57 and snap[-1]["t"] == "23:40"
+    assert 3 < len(mon.korail.trains.calls) < m.MAX_SEARCH_PAGES
+
+
+def test_search_stops_once_the_window_end_is_reached(mon):
+    mon.korail.trains = PagedTrains(_every_20_min())
+    j = add_job(mon, time_from="08:00", time_to="10:00")
+    mon._check_group("서울", "부산", TOMORROW, "KTX", [j])
+    assert len(mon.korail.trains.calls) == 1  # 08:00 부터 한 쪽이면 10:00 을 넘는다 (예전엔 항상 3쪽을 받았다)
+    assert [t["t"] for t in job(mon, j["id"])["trains"]] == ["08:00", "08:20", "08:40", "09:00", "09:20", "09:40", "10:00"]
+
+
+def test_search_page_count_is_capped(mon):
+    mon.korail.trains = PagedTrains(list(range(0, 24 * 60, 3)))  # 3분 간격 480편
+    j = add_job(mon, time_from="00:00", time_to="23:59")
+    mon._check_group("서울", "부산", TOMORROW, "KTX", [j])
+    assert len(mon.korail.trains.calls) == m.MAX_SEARCH_PAGES
+
+
+def test_search_covers_the_latest_job_in_the_group(mon):
+    """같은 노선·날짜의 감시는 한 번에 조회한다 — 가장 늦은 시간대까지 받아야 한다."""
+    mon.korail.trains = PagedTrains(_every_20_min())
+    a, b = add_job(mon, time_from="06:00", time_to="08:00"), add_job(mon, time_from="20:00", time_to="22:00")
+    mon._check_group("서울", "부산", TOMORROW, "KTX", [a, b])
+    assert job(mon, b["id"])["trains"][-1]["t"] == "22:00"
+
+
+# ---------------------------------------------------------------- 중지·삭제와 예약의 경합
+def test_stopped_job_is_not_reserved(mon):
+    j = add_job(mon)
+    mon.jobs.update(j["id"], status="stopped")  # 조회하는 사이 사용자가 중지를 눌렀다 (j 는 그 전의 스냅샷)
+    mon._try_reserve(j, [FakeTrain("0700", general=True)])
+    assert not mon.korail.reservations.created and not mon.sent
+
+
+def test_job_deleted_while_reserving_cancels_the_orphan(mon):
+    j = add_job(mon)
+    rs = mon.korail.reservations
+    create = rs.create
+
+    def create_then_delete(*a, **k):
+        rsv = create(*a, **k)
+        mon.jobs.remove(j["id"])  # 예약이 나가는 사이 사용자가 삭제했다
+        return rsv
+
+    rs.create = create_then_delete
+    mon._try_reserve(j, [FakeTrain("0700", general=True)])
+    assert [r.rsv_id for r in rs.cancelled] == ["R1"]  # 추적할 수 없는 예약이 남지 않게 바로 취소
+    assert not mon.sent and mon.jobs.all() == []
 
 
 # ---------------------------------------------------------------- 결제 재알림 / 취소
@@ -268,6 +367,58 @@ def test_paused_remind_stops_after_payment_deadline(mon):
     mon._tick()
     assert len(mon.sent) == sent_before  # 기한이 지났으면 더 알리지 않는다
     assert job(mon, j["id"])["status"] == "reserved"  # 사라졌는지는 접속이 풀린 뒤 확인한다
+
+
+def _reserved_job(mon, limit_in: timedelta, **job_fields):
+    """예약이 잡힌 작업을 만들고 결제기한을 limit_in 뒤로 맞춘다. 재알림 주기는 이미 지난 상태."""
+    j = add_job(mon)
+    mon._try_reserve(j, [FakeTrain("0700", general=True)])
+    mon.jobs.update(j["id"], result={**job(mon, j["id"])["result"], "buy_limit_iso": (datetime.now() + limit_in).isoformat()}, **job_fields)
+    mon._reminders[j["id"]] = time.time() - m.REMIND_EVERY - 1
+    mon.sent.clear()
+    mon.urgent.clear()
+    return j
+
+
+def test_gone_before_the_deadline_means_paid(mon):
+    j = _reserved_job(mon, timedelta(minutes=5))
+    mon._remind([job(mon, j["id"])])  # 코레일 목록에 R1 이 없음
+    assert job(mon, j["id"])["status"] == "done"
+    assert len(mon.sent) == 1 and "결제를 마친" in mon.sent[0]
+
+
+def test_gone_after_the_deadline_with_a_ticket_means_paid(mon):
+    j = _reserved_job(mon, timedelta(minutes=-1))  # 기한 직전에 결제하고 기한 뒤에 확인한 경우
+    mon.korail.tickets.items = [FakeTicket("R1")]
+    mon._remind([job(mon, j["id"])])
+    assert job(mon, j["id"])["status"] == "done"
+    assert "결제 완료" in mon.sent[0]
+
+
+def test_expired_unpaid_reservation_resumes_watching(mon):
+    j = _reserved_job(mon, timedelta(minutes=-3))
+    mon._remind([job(mon, j["id"])])  # 기한이 지났고 발권된 승차권도 없다 → 만료
+    r = job(mon, j["id"])
+    assert r["status"] == "watching" and r["result"] is None and r["resumes"] == 1
+    assert len(mon.sent) == 1 and "만료" in mon.sent[0] and "다시 시작" in mon.sent[0]
+    assert mon.urgent == [] and j["id"] not in mon._reminders
+
+
+def test_auto_resume_is_capped(mon):
+    """결제할 생각이 없는 사용자에게 같은 열차를 무한히 다시 잡아 울리지 않는다."""
+    j = _reserved_job(mon, timedelta(minutes=-3), resumes=m.MAX_AUTO_RESUMES)
+    mon._remind([job(mon, j["id"])])
+    assert job(mon, j["id"])["status"] == "done"
+    assert "감시를 종료" in mon.sent[0]
+
+
+def test_gone_after_the_deadline_but_tickets_unreadable_does_not_resume(mon):
+    j = _reserved_job(mon, timedelta(minutes=-3))
+    mon.korail.tickets.error = RuntimeError("boom")
+    mon._remind([job(mon, j["id"])])
+    assert job(mon, j["id"])["status"] == "done"  # 결제했을 수도 있으니 불확실하면 다시 잡지 않는다
+    assert "확인하지 못해" in mon.sent[0]
+    assert any("발권 내역 확인 오류" in e["msg"] for e in mon.logs)
 
 
 def test_cancel_reservation(mon):
@@ -360,6 +511,22 @@ def test_notify_failure_is_logged_not_raised(real_notify, monkeypatch):
     monkeypatch.setattr(m.discord, "send", boom)
     real_notify.notify("[KTX 예약 성공]", urgent=True)  # 알림이 실패해도 예약 흐름은 계속돼야 한다
     assert any("디스코드 전송 실패" in e["msg"] and e["level"] == "error" for e in real_notify.logs)
+
+
+def test_notify_error_is_exposed_until_a_send_succeeds(real_notify, monkeypatch):
+    """웹후크가 지워지는 등 전송이 계속 실패하면 화면에 보여야 한다 (로그만 보면 알림이 조용히 끊긴다)."""
+    assert real_notify.notify_error is None
+    ok = real_notify.posts.append
+
+    def boom(text, mention_everyone=False):
+        raise RuntimeError("디스코드 전송 실패 (404): Unknown Webhook")
+
+    monkeypatch.setattr(m.discord, "send", boom)
+    real_notify.notify("[KTX] 안내")
+    assert "404" in real_notify.notify_error
+    monkeypatch.setattr(m.discord, "send", lambda text, mention_everyone=False: ok((text, mention_everyone)))
+    real_notify.notify("[KTX] 안내")
+    assert real_notify.notify_error is None
 
 
 # ---------------------------------------------------------------- 안내문 / 저장소

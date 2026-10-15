@@ -6,6 +6,7 @@ import logging
 import sys
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -13,7 +14,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from . import config, discord
+from . import config, discord, store, update
+from ._version import __version__
 from .monitor import MAX_INTERVAL, MIN_INTERVAL, OPTIONS, TRAIN_TYPES, Monitor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -22,8 +24,16 @@ STATIC = (Path(getattr(sys, "_MEIPASS", "")) / "ktx" / "static") if getattr(sys,
 LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 
 
+def _drop_legacy_kakao() -> None:
+    """v1.2 까지 카카오 알림에 쓰던 키·토큰. 더 이상 쓰지 않으니 남겨 두지 않는다."""
+    config.remove("KAKAO_REST_API_KEY", "KAKAO_CLIENT_SECRET")
+    (store.DATA_DIR / "kakao.json").unlink(missing_ok=True)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    _drop_legacy_kakao()
+    update.start()
     monitor.start()
     yield
 
@@ -51,6 +61,24 @@ class JobIn(BaseModel):
     option: str = "GENERAL_FIRST"
     train_type: str = "KTX"
     adults: int = Field(default=1, ge=1, le=9)
+
+    @field_validator("date")
+    @classmethod
+    def _date(cls, v: str) -> str:
+        try:  # 정규식만으로는 2026-13-45 같은 날짜를 못 거른다 — 저장되면 매 조회가 터진다
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("올바른 날짜가 아니에요") from None
+        return v
+
+    @field_validator("time_from", "time_to")
+    @classmethod
+    def _time(cls, v: str) -> str:
+        try:
+            datetime.strptime(v, "%H:%M")
+        except ValueError:
+            raise ValueError("올바른 시각이 아니에요") from None
+        return v
 
     @field_validator("option")
     @classmethod
@@ -82,6 +110,9 @@ def state():
         "interval": monitor.settings["interval"],
         "min_interval": MIN_INTERVAL,
         "max_interval": MAX_INTERVAL,
+        "version": __version__,
+        "update": update.available,
+        "notify_error": monitor.notify_error,
         "setup": {"korail": korail_set, "discord": discord.configured()},
         "stations": monitor.stations(),
         "options": OPTIONS,
@@ -108,7 +139,7 @@ def job_action(job_id: str, action: str):
     if action == "stop":
         monitor.jobs.update(job_id, status="stopped")
     elif action == "resume":
-        monitor.jobs.update(job_id, status="watching", result=None)
+        monitor.jobs.update(job_id, status="watching", result=None, resumes=0)  # 직접 다시 시작하면 자동 재개 횟수도 처음부터
         monitor.wake()
     elif action == "cancel":  # 예약 취소(좌석 반납) 후 중지
         try:
@@ -168,6 +199,7 @@ def setup_discord(body: DiscordIn):
     except Exception as e:
         raise HTTPException(400, str(e)) from e
     config.put(discord.KEY, url)
+    monitor.notify_error = None
     monitor.say("디스코드 알림 연결 완료", "ok")
     return {"ok": True}
 
@@ -188,5 +220,7 @@ def discord_test():
     try:
         discord.send("[KTX] 테스트 알림입니다. 이 메시지가 보이면 연결 성공!")
     except Exception as e:
+        monitor.notify_error = str(e)
         raise HTTPException(400, str(e)) from e
+    monitor.notify_error = None
     return {"ok": True}

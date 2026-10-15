@@ -60,7 +60,7 @@
   /* ---------- 배너 ---------- */
   #banners { display:flex; flex-direction:column; gap:10px; margin-bottom:16px; }
   .banner { display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; padding:14px 18px; border-radius:14px; font-weight:500; animation: rise .35s var(--ease) both; }
-  .banner.err { background:var(--err-bg); color:#9b1c28; } .banner.warn { background:var(--warn-bg); color:var(--warn); }
+  .banner.err { background:var(--err-bg); color:#9b1c28; } .banner.warn { background:var(--warn-bg); color:var(--warn); } .banner.info { background:var(--soft); color:var(--text); }
   .banner b { font-weight:800; }
 
   /* ---------- 레이아웃: 목록(왼쪽) + 폼(오른쪽, 고정) ---------- */
@@ -321,11 +321,15 @@ function renderBanners() {
     const watching = S.jobs.some(j => j.status === 'watching');
     if (S.setup.korail && !S.setup.discord && wizardStep() === 0) b.push(`<div class="banner warn"><span><b>디스코드 알림이 설정되지 않았어요.</b> 지금은 예약이 되어도 알림이 가지 않아요.${watching ? ' 감시 중인 항목이 있어요!' : ''}</span><button class="btn small" id="bannerDiscord">디스코드 연결하기</button></div>`);
     if (S.paused_for) b.push(`<div class="banner err"><span><b>코레일이 접속을 제한했어요.</b> ${Math.ceil(S.paused_for/60)}분 뒤에 자동으로 다시 시도해요. VPN이 켜져 있다면 꺼 주세요.</span></div>`);
+    if (S.notify_error) b.push(`<div class="banner err"><span><b>디스코드 알림이 전송되지 않고 있어요.</b> 웹후크가 삭제되지 않았는지 확인하세요. (${esc(S.notify_error)})</span><button class="btn small" id="bannerNotify">설정 열기</button></div>`);
+    if (S.update && store.get('dismissUpdate') !== S.update.version) b.push(`<div class="banner info"><span><b>새 버전 v${esc(S.update.version)}이 나왔어요.</b> 받은 뒤 지금 실행 중인 ktx를 종료하고 새 ktx.exe로 바꿔 실행하세요. 설정과 감시 목록은 그대로 이어져요.</span><span class="row"><a href="${esc(S.update.url)}" target="_blank" rel="noopener" style="text-decoration:none"><button class="btn small" type="button">다운로드</button></a><button class="btn sub small" id="bannerUpdateLater">나중에</button></span></div>`);
   }
   const html = b.join('');
   if (html === bannersShown) return;  // 매 폴링마다 다시 그리면 등장 애니메이션이 반복돼 깜빡인다
   bannersShown = html;
   $('banners').innerHTML = html;
+  const bn = $('bannerNotify'); if (bn) bn.onclick = openSettings;
+  const bu = $('bannerUpdateLater'); if (bu) bu.onclick = () => { store.set('dismissUpdate', S.update.version); bannersShown = null; renderBanners(); };
   const bd = $('bannerDiscord'); if (bd) bd.onclick = () => { store.set('skipNotify', ''); wizardShown = -1; renderWizard(); renderBanners(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 }
 function renderStatus() {
@@ -540,7 +544,8 @@ function renderSettings() {
       <div class="chips" id="sInt">${INTERVALS.map(([v, l]) => `<button type="button" class="chip" data-v="${v}" aria-pressed="${S.interval === v}">${l}</button>`).join('')}<button type="button" class="chip" id="sCustom" aria-pressed="${!isPreset(S.interval)}">직접 입력</button></div>
       <form class="row" id="sIntForm" novalidate style="margin-top:10px;align-items:center" ${isPreset(S.interval) ? 'hidden' : ''}><input class="input" id="sIntVal" type="number" inputmode="numeric" min="${S.min_interval}" max="${S.max_interval}" step="1" value="${S.interval}" style="width:120px" aria-label="조회 간격(초)"><span class="t-small">초 (최소 ${S.min_interval}초)</span><button class="btn small">적용</button></form>
       <p class="t-small" style="margin:10px 0 0">현재 ${fmtSec(S.interval)}마다 조회</p></div>
-    <div class="set"><details class="logbox"><summary>활동 로그</summary><div class="log" id="logs">${logHtml()}</div></details></div>`;
+    <div class="set"><details class="logbox"><summary>활동 로그</summary><div class="log" id="logs">${logHtml()}</div></details>
+      <p class="t-small" style="margin-top:10px">ktx ${S.version === 'dev' ? '(개발 실행)' : 'v' + esc(S.version)}</p></div>`;
   const on = (id, fn) => $(id) && ($(id).onclick = fn);
   on('sTest', async () => { try { await api('/api/discord/test', 'POST'); toast('보냈어요. 디스코드를 확인하세요', 'ok'); } catch (e) { toast(e.message, 'err'); } });
   on('sResetDiscord', async () => { if (await ask('저장된 디스코드 웹후크를 지울까요? 알림이 오지 않게 돼요.', '지우기', true)) { await api('/api/setup/reset/discord', 'POST'); store.set('skipNotify', ''); wizardShown = -1; await poll(); renderSettings(); } });
