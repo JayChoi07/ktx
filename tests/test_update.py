@@ -469,7 +469,7 @@ def test_helper_really_swaps_files_after_the_process_exits(tmp_path):
     new.write_bytes(b"NEW-EXE")
     proc = running_fake_exe(exe, 3)
     run_helper(update.helper_script(proc.pid, exe, new, old, sha256=sha(b"NEW-EXE").upper(), start=False))
-    assert exe.read_bytes() == b"NEW-EXE" and old.exists() and not new.exists()
+    assert exe.read_bytes() == b"NEW-EXE" and old.exists() and not new.exists(), run_helper.output
     assert old.stat().st_size > 10_000  # 옛 exe 는 .old 로 남는다 (새 exe 가 첫 실행에 지운다)
 
 
@@ -557,6 +557,6 @@ def test_helper_survives_quotes_and_injection_in_the_folder_name(tmp_path):
     try:
         run_helper(update.helper_script(proc.pid, exe, new, old, sha256=sha(b"NEW-EXE"), start=False))
         assert not marker.exists(), "폴더 이름에 든 명령이 실행됐다"
-        assert exe.read_bytes() == b"NEW-EXE" and old.exists()
+        assert exe.read_bytes() == b"NEW-EXE" and old.exists(), run_helper.output
     finally:
         marker.unlink(missing_ok=True)

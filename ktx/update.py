@@ -203,14 +203,17 @@ def helper_script(
         f"$new = {_data(new)}",
         f"$old = {_data(old)}",
         f"$p = Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue",
-        f"if ($p) {{ $null = $p.WaitForExit({int(wait) * 1000}); if (-not $p.HasExited) {{ exit 1 }} }}",
+        f"if ($p) {{ $null = $p.WaitForExit({int(wait) * 1000}); "
+        "if (-not $p.HasExited) { Write-Output 'old process still running'; exit 1 } }",
         "Start-Sleep -Seconds 1",
         "$swap = $true",
     ]
     if sha256:
         lines += [
-            "try { $h = (Get-FileHash -LiteralPath $new -Algorithm SHA256).Hash } catch { $h = '' }",
-            f"if ($h -ne '{sha256.upper()}') {{ $swap = $false; Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue }}",
+            "try { $h = (Get-FileHash -LiteralPath $new -Algorithm SHA256 -ErrorAction Stop).Hash } "
+            "catch { $h = ''; Write-Output \"hash error: $($_.Exception.Message)\" }",
+            f"if ($h -ne '{sha256.upper()}') {{ Write-Output \"hash mismatch: got '$h'\"; $swap = $false; "
+            "Remove-Item -LiteralPath $new -Force -ErrorAction SilentlyContinue }",
         ]
     lines += [
         "function Try-Move($from, $to) {",
