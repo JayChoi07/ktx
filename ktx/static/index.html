@@ -395,7 +395,7 @@ function initForm() {
     const [y, m, d] = $('date').value.split('-').map(Number);
     $('dateLabel').textContent = y ? `${m}월 ${d}일 (${DOW[new Date(y, m - 1, d).getDay()]})` : '';
     chips($('dateChips'), [...dateItems, ['__pick', '다른 날짜']], k => k === '__pick' ? !isPreset($('date').value) : $('date').value === k,
-      k => { if (k === '__pick') { try { $('date').showPicker(); } catch { $('date').focus(); } } else $('date').value = k; });
+      k => { if (k === '__pick') { try { $('date').showPicker(); } catch { $('date').focus(); } } else { $('date').value = k; redrawDate(); } });  // 코드로 바꾼 값은 change 가 안 떠서 라벨을 직접 갱신
   };
   redrawDate(); $('date').addEventListener('change', redrawDate);
   let timeCustom = false;

@@ -171,6 +171,40 @@ def test_access_restricted_pauses_and_warns(mon):
     assert mon.paused_until > time.time() + 500
     assert job(mon, j["id"])["status"] == "watching"
     assert any("접속 제한" in t for t in mon.sent)
+    assert any("접속 제한" in t for t in mon.urgent)  # 감시가 멈춘 걸 놓치지 않도록 @everyone
+
+
+def test_block_pings_everyone_only_once_per_episode(mon):
+    e = AccessRestrictedError(403, "이용제한", "-2000")
+    mon._blocked(e)
+    mon._blocked(e)  # 10분 뒤에도 계속 막혀 있는 경우: 알림은 가되 또 울리지는 않는다
+    assert len(mon.sent) == 2 and len(mon.urgent) == 1
+    # 정상 조회가 한 번 되면 에피소드가 끝나고, 다음 제한은 다시 울린다
+    mon.paused_until = 0
+    j = add_job(mon)
+    mon.korail.trains.result = NoResultsError()
+    mon._check_group("서울", "부산", TOMORROW, "KTX", [j])
+    mon._blocked(e)
+    assert len(mon.urgent) == 2
+
+
+def test_login_failure_pauses_for_an_hour_and_pings_everyone(mon, monkeypatch):
+    class BadKorail:
+        def __init__(self, **kw):
+            pass
+
+        def login(self, uid, pw):
+            raise LoginFailedError("틀림")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(m.config, "get", lambda name: "x")
+    monkeypatch.setattr(m, "Korail", BadKorail)
+    mon.korail = None
+    assert mon._login() is False
+    assert mon.paused_until > time.time() + 3500
+    assert len(mon.urgent) == 1 and "로그인에 실패" in mon.urgent[0]
 
 
 def test_other_korail_error_is_logged_and_continues(mon):
@@ -203,6 +237,37 @@ def test_remind_renotifies_only_after_interval(mon, monkeypatch):
     assert len(mon.sent) == sent_before + 1 and "[KTX 결제 대기]" in mon.sent[-1]
     assert mon.urgent == [mon.sent[0]]  # 재알림은 멘션 없이
     assert job(mon, j["id"])["status"] == "reserved"
+
+
+def _reserve_and_age_reminder(mon):
+    j = add_job(mon)
+    mon._try_reserve(j, [FakeTrain("0700", general=True)])
+    mon._reminders[j["id"]] = time.time() - m.REMIND_EVERY - 1  # 재알림 주기가 지난 상태
+    return j
+
+
+def test_remind_keeps_going_while_paused_without_calling_korail(mon):
+    """접속 제한으로 멈춘 10분 동안에도 결제 재알림은 가야 한다. 다만 막힌 코레일을 또 부르면 안 된다."""
+    _reserve_and_age_reminder(mon)
+    mon.paused_until = time.time() + 600
+    asked = []
+    mon.korail.reservations.find = lambda rid: asked.append(rid)
+    sent_before = len(mon.sent)
+    mon._tick()
+    assert asked == []
+    assert len(mon.sent) == sent_before + 1 and "[KTX 결제 대기]" in mon.sent[-1]
+    assert "확인하지 못했어요" in mon.sent[-1]
+
+
+def test_paused_remind_stops_after_payment_deadline(mon):
+    j = _reserve_and_age_reminder(mon)
+    past = (datetime.now() - timedelta(minutes=1)).isoformat()
+    mon.jobs.update(j["id"], result={**job(mon, j["id"])["result"], "buy_limit_iso": past})
+    mon.paused_until = time.time() + 600
+    sent_before = len(mon.sent)
+    mon._tick()
+    assert len(mon.sent) == sent_before  # 기한이 지났으면 더 알리지 않는다
+    assert job(mon, j["id"])["status"] == "reserved"  # 사라졌는지는 접속이 풀린 뒤 확인한다
 
 
 def test_cancel_reservation(mon):

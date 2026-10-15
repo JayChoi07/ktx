@@ -188,8 +188,12 @@ def test_06_add_job(page):
     expect(page.locator("#dep")).to_have_value("서울")
     expect(page.locator("#arr")).to_have_value("부산")
     page.click("#dateChips .chip:has-text('내일')")
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    tomorrow_dt = datetime.now() + timedelta(days=1)
+    tomorrow = tomorrow_dt.strftime("%Y-%m-%d")
     expect(page.locator("#date")).to_have_value(tomorrow)
+    # 칩으로 바꿔도 라벨이 따라 바뀌어야 한다 (코드로 바꾼 input 값은 change 이벤트가 안 뜬다)
+    dow = "일월화수목금토"[(tomorrow_dt.weekday() + 1) % 7]  # JS getDay(): 일요일=0
+    expect(page.locator("#dateLabel")).to_have_text(f"{tomorrow_dt.month}월 {tomorrow_dt.day}일 ({dow})")
     expect(page.locator("#timeCustom")).to_be_hidden()
     page.click("#timeChips .chip:has-text('직접 입력')")
     expect(page.locator("#timeCustom")).to_be_visible()

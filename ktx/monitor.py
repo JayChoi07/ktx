@@ -100,6 +100,7 @@ class Monitor:
         self._wake = threading.Event()
         self._stations: list[str] = []
         self._reminders: dict[str, float] = {}
+        self._block_pinged = False  # 접속 제한이 이어지는 동안 @everyone 은 첫 알림에만 쓴다
 
     # ---------- 공개 ----------
     def start(self) -> None:
@@ -163,11 +164,12 @@ class Monitor:
             if not self._stations:
                 self._stations = sorted(s.name for s in self.korail.stations.all())
             self.say("코레일 로그인 성공")
+            self._block_pinged = False
             return True
         except LoginFailedError as e:
             self.login_state = "로그인 실패"
             self.say(friendly(e), "error")
-            self.notify(f"[KTX] {friendly(e)}")
+            self.notify(f"[KTX] {friendly(e)}", urgent=True)  # 1시간 멈추므로 놓치면 안 된다
             self.paused_until = time.time() + 3600  # 비밀번호 오류 반복 시 계정 잠김 방지
         except AccessRestrictedError as e:
             self._blocked(e)
@@ -179,7 +181,8 @@ class Monitor:
     def _blocked(self, e: Exception) -> None:
         self.paused_until = time.time() + BLOCK_PAUSE
         self.say(f"{friendly(e)} ({BLOCK_PAUSE // 60}분 쉬었다가 다시 시도합니다)", "error")
-        self.notify(f"[KTX] 코레일 접속 제한 감지 — {BLOCK_PAUSE // 60}분 쉽니다. VPN을 껐는지 확인하세요.")
+        first, self._block_pinged = not self._block_pinged, True  # 계속 막혀 있으면 10분마다 또 울리지 않게
+        self.notify(f"[KTX] 코레일 접속 제한 감지 — {BLOCK_PAUSE // 60}분 쉽니다. VPN을 껐는지 확인하세요.", urgent=first)
 
     @property
     def account(self) -> str | None:
@@ -224,8 +227,6 @@ class Monitor:
             self._wake.clear()
 
     def _tick(self) -> None:
-        if time.time() < self.paused_until:
-            return
         now = datetime.now()
         today, hhmm = now.strftime("%Y-%m-%d"), now.strftime("%H:%M")
         for j in self.jobs.all():  # 지난 날짜·이미 지나간 시간대 작업 정리
@@ -237,10 +238,12 @@ class Monitor:
         reserved = [j for j in jobs if j["status"] == "reserved"]
         if not watching and not reserved:
             return
-        if self.korail is None and not self._login():
-            return
+        # 접속 제한으로 멈춘 동안에는 코레일을 부르지 않지만, 결제 재알림은 계속 간다
+        online = time.time() >= self.paused_until and (self.korail is not None or self._login())
         if reserved:
-            self._remind(reserved)
+            self._remind(reserved, verify=online)
+        if not online:
+            return
         groups: dict[tuple, list[dict]] = {}
         for j in watching:
             groups.setdefault((j["dep"], j["arr"], j["date"], j["train_type"]), []).append(j)
@@ -270,6 +273,7 @@ class Monitor:
         except Exception as e:
             self.say(f"조회 오류 {dep}→{arr}: {e}", "warn")
             return
+        self._block_pinged = False  # 조회가 정상으로 돌아왔다 — 접속 제한 에피소드 끝
         now = datetime.now().strftime("%m/%d %H:%M:%S")
         for job in jobs:
             self.jobs.update(
@@ -321,13 +325,23 @@ class Monitor:
             )
             return
 
-    def _remind(self, reserved: list[dict]) -> None:
-        """결제 전까지 주기적으로 재알림. 예약이 목록에서 사라지면(결제/기한만료) 종료."""
+    def _remind(self, reserved: list[dict], verify: bool = True) -> None:
+        """결제 전까지 주기적으로 재알림. 예약이 목록에서 사라지면(결제/기한만료) 종료.
+
+        verify=False 는 코레일 접속이 막힌 상태다 — 예약이 남아 있는지 확인할 수 없으니 저장해 둔 결제기한 전까지만 알린다.
+        """
         for j in reserved:
             if time.time() - self._reminders.get(j["id"], 0) < REMIND_EVERY:
                 continue
             self._reminders[j["id"]] = time.time()
             r = j["result"]
+            if not verify:
+                limit = r.get("buy_limit_iso")
+                if limit and datetime.now() < datetime.fromisoformat(limit):
+                    self.notify(
+                        f"[KTX 결제 대기] {r['train']}\n결제기한 {r['buy_limit']} (코레일 접속 제한 중이라 예약 상태는 확인하지 못했어요)"
+                    )
+                continue
             try:
                 still = self.korail.reservations.find(r["rsv_id"])
             except Exception as e:
