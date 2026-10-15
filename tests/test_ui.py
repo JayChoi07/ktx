@@ -142,6 +142,15 @@ def test_settings_sheet_shows_discord_and_version(open_page):
     expect(page2.locator("#settings #sLinkDiscord")).to_be_visible()
 
 
+# ---------------------------------------------------------------- 결제 안내
+def test_form_tells_where_to_pay_in_korail_talk(open_page):
+    """'결제는 직접 코레일톡에서'만으로는 어디서 하는지 알 수 없다 — 앱 안의 경로를 그대로 알려 준다."""
+    page, _ = open_page(state())
+    guide = page.locator("#form .t-small").last
+    expect(guide).to_contain_text("결제는 직접")
+    expect(guide).to_contain_text("홈 → 전체 메뉴 → 아래쪽 [기차] → 예약 승차권 조회·취소")
+
+
 # ---------------------------------------------------------------- 예약 완료 카드
 def paid_job() -> dict:
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
