@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +24,22 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 monitor = Monitor()
 STATIC = (Path(getattr(sys, "_MEIPASS", "")) / "ktx" / "static") if getattr(sys, "frozen", False) else Path(__file__).parent / "static"
 LOCAL_HOSTS = {"localhost", "127.0.0.1"}
+
+
+# run.py 가 트레이 종료 함수로 바꿔 끼운다 (업데이트 뒤 재시작에 쓴다)
+exit_app: Callable[[], None] = lambda: os._exit(0)  # noqa: E731
+
+
+def _update_view() -> dict | None:
+    """화면에 내보내는 업데이트 정보. 내려받기 주소·해시는 서버 안에만 둔다."""
+    u = update.available
+    if not u:
+        return None
+    ok, why = update.can_install()
+    if ok and any(j["status"] == "reserved" for j in monitor.jobs.all()):
+        # 재시작하는 동안엔 결제 재알림과 예약 확인이 끊기므로, 결제를 마친 뒤에 하게 한다
+        ok, why = False, "결제 대기 중인 예약이 있어서 지금은 업데이트할 수 없어요. 결제를 마친 뒤에 눌러 주세요."
+    return {"version": u["version"], "url": u["url"], "installable": ok, "why_not": why}
 
 
 def _drop_legacy_kakao() -> None:
@@ -111,7 +129,8 @@ def state():
         "min_interval": MIN_INTERVAL,
         "max_interval": MAX_INTERVAL,
         "version": __version__,
-        "update": update.available,
+        "update": _update_view(),
+        "update_install": dict(update.install_state),
         "notify_error": monitor.notify_error,
         "setup": {"korail": korail_set, "discord": discord.configured()},
         "stations": monitor.stations(),
@@ -155,6 +174,28 @@ def job_action(job_id: str, action: str):
 @app.delete("/api/jobs/{job_id}")
 def delete_job(job_id: str):
     monitor.jobs.remove(job_id)
+    return {"ok": True}
+
+
+# ---------- 업데이트 ----------
+@app.post("/api/update/check")
+def update_check():
+    return update.check_now()
+
+
+@app.post("/api/update/install")
+def update_install():
+    view = _update_view()
+    if view is None:
+        raise HTTPException(400, "설치할 새 버전이 없어요")
+    if not view["installable"]:
+        raise HTTPException(409, view["why_not"])
+    try:
+        started = update.start_install(lambda: exit_app())  # 호출 시점의 exit_app 을 쓴다 (run.py 가 나중에 바꿔 끼운다)
+    except update.UpdateError as e:
+        raise HTTPException(409, str(e)) from e
+    if not started:
+        raise HTTPException(409, "이미 업데이트를 진행 중이에요")
     return {"ok": True}
 
 

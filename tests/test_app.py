@@ -23,6 +23,7 @@ def api(tmp_path, monkeypatch):
 
     monkeypatch.setattr(app_module.config, "get", lambda name: None)  # 키체인을 읽지 않는다
     monkeypatch.setattr(app_module.update, "available", None)
+    monkeypatch.setattr(app_module.update, "install_state", {"phase": "idle", "done": 0, "total": 0, "error": None})
     app_module.monitor.notify_error = None  # 앱 모듈은 테스트 사이에 공유되는 싱글턴이다
     client = TestClient(app_module.app, base_url="http://localhost")  # with 로 열지 않아 감시 스레드가 뜨지 않는다
     client.mod = app_module
@@ -92,3 +93,73 @@ def test_legacy_kakao_leftovers_are_removed(api, tmp_path, monkeypatch):
     assert removed == ["KAKAO_REST_API_KEY", "KAKAO_CLIENT_SECRET"]
     assert not (tmp_path / "kakao.json").exists()
     api.mod._drop_legacy_kakao()  # 이미 없어도 에러 없이 지나간다
+
+
+# ---------------------------------------------------------------- 업데이트 (확인 / 설치)
+NEWER = {
+    "version": "9.9.9",
+    "url": "https://github.com/JayChoi07/ktx/releases/tag/v9.9.9",
+    "asset": {"url": "https://github.com/JayChoi07/ktx/releases/download/v9.9.9/ktx.exe", "sha256": "a" * 64, "size": 3},
+}
+
+
+@pytest.fixture
+def upd(api, monkeypatch):
+    """새 버전이 있고 설치 가능한 상태."""
+    monkeypatch.setattr(api.mod.update, "available", NEWER)
+    monkeypatch.setattr(api.mod.update, "can_install", lambda: (True, None))
+    monkeypatch.setattr(api.mod.update, "install_state", {"phase": "idle", "done": 0, "total": 0, "error": None})
+    return api
+
+
+def reserve(api) -> None:
+    j = api.mod.monitor.jobs.add({**JOB, "option": "GENERAL_FIRST", "train_type": "KTX", "adults": 1})
+    api.mod.monitor.jobs.update(j["id"], status="reserved", result={"rsv_id": "R1"})
+
+
+def test_state_tells_the_page_whether_it_can_install_without_leaking_internals(upd, monkeypatch):
+    u = upd.get("/api/state").json()["update"]
+    assert u == {"version": "9.9.9", "url": NEWER["url"], "installable": True, "why_not": None}  # 내려받기 주소·해시는 화면에 안 내보낸다
+    monkeypatch.setattr(upd.mod.update, "can_install", lambda: (False, "exe 로 실행 중일 때만 가능해요"))
+    u = upd.get("/api/state").json()["update"]
+    assert u["installable"] is False and "exe" in u["why_not"]
+
+
+def test_install_is_blocked_while_a_payment_is_pending(upd):
+    """재시작 중에는 결제 재알림이 끊기고 예약 확인도 늦어진다 — 결제를 마친 뒤에 하게 한다."""
+    reserve(upd)
+    u = upd.get("/api/state").json()["update"]
+    assert u["installable"] is False and "결제" in u["why_not"]
+    r = upd.post("/api/update/install")
+    assert r.status_code == 409 and "결제" in r.json()["detail"]
+
+
+def test_state_exposes_install_progress(upd, monkeypatch):
+    monkeypatch.setattr(upd.mod.update, "install_state", {"phase": "downloading", "done": 10, "total": 100, "error": None})
+    assert upd.get("/api/state").json()["update_install"] == {"phase": "downloading", "done": 10, "total": 100, "error": None}
+
+
+def test_install_endpoint_starts_the_install_with_an_exit_hook(upd, monkeypatch):
+    started = []
+    monkeypatch.setattr(upd.mod.update, "start_install", lambda exit_cb: started.append(exit_cb) or True)
+    assert upd.post("/api/update/install").json() == {"ok": True}
+    exited = []
+    monkeypatch.setattr(upd.mod, "exit_app", lambda: exited.append(1))  # run.py 가 나중에 바꿔 끼운 종료 함수도 따라간다
+    started[0]()
+    assert exited == [1]
+
+
+def test_install_endpoint_rejects_what_it_cannot_do(upd, monkeypatch):
+    monkeypatch.setattr(upd.mod.update, "start_install", lambda exit_cb: False)
+    r = upd.post("/api/update/install")
+    assert r.status_code == 409 and "진행 중" in r.json()["detail"]
+    monkeypatch.setattr(upd.mod.update, "can_install", lambda: (False, "이 릴리스는 자동 설치용 정보가 없어요"))
+    r = upd.post("/api/update/install")
+    assert r.status_code == 409 and "정보" in r.json()["detail"]
+    monkeypatch.setattr(upd.mod.update, "available", None)  # 새 버전이 없다
+    assert upd.post("/api/update/install").status_code == 400
+
+
+def test_check_endpoint_reports_the_outcome(api, monkeypatch):
+    monkeypatch.setattr(api.mod.update, "check_now", lambda: {"status": "latest", "update": None, "error": None, "latest": "1.4.1"})
+    assert api.post("/api/update/check").json()["status"] == "latest"

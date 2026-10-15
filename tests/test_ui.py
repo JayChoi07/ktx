@@ -27,6 +27,7 @@ def state(**over) -> dict:
     s = {
         "login": "로그인됨 (테스트)", "account": "테스트", "paused_for": 0, "interval": 30.0, "min_interval": 10.0, "max_interval": 3600.0,
         "version": "1.3.1", "update": None, "notify_error": None, "setup": {"korail": True, "discord": True},
+        "update_install": {"phase": "idle", "done": 0, "total": 0, "error": None},
         "stations": ["서울", "부산", "대전"],
         "options": {"GENERAL_FIRST": "전부 (일반실 먼저)", "GENERAL_ONLY": "일반실만", "SPECIAL_ONLY": "특실만"},
         "jobs": [], "logs": [],
@@ -67,7 +68,10 @@ def open_page(browser):
             if path == "/":
                 route.fulfill(body=INDEX, content_type="text/html; charset=utf-8")
             elif path == "/api/state":
-                route.fulfill(json=st)
+                if st.get("__down"):  # 서버가 꺼진 것처럼 (업데이트 재시작 중)
+                    route.abort()
+                else:
+                    route.fulfill(json={k: v for k, v in st.items() if k != "__down"})
             elif req.method == "POST" and path in (posts or {}):
                 route.fulfill(**posts[path])
             else:
@@ -203,6 +207,101 @@ def test_update_banner_links_to_the_release_and_can_be_dismissed(open_page):
     expect(page.locator("#app")).to_be_visible()
     page.wait_for_timeout(500)
     expect(page.locator("#banners")).not_to_contain_text("새 버전")  # 같은 버전은 다시 보여주지 않는다
+
+
+# ---------------------------------------------------------------- 업데이트 (버튼 한 번으로)
+def newer(**over) -> dict:
+    return {"version": "9.9.9", "url": RELEASE, "installable": True, "why_not": None, **over}
+
+
+def test_update_banner_offers_one_click_install_after_confirming(open_page):
+    page, sent = open_page(state(update=newer()), posts={"/api/update/install": {"json": {"ok": True}}})
+    banner = page.locator("#banners .banner.info")
+    expect(banner).to_contain_text("새 버전 v9.9.9")
+    expect(banner.locator("a")).to_have_attribute("href", RELEASE)  # 직접 받기는 그대로 있다
+    page.click("#bannerUpdate")
+    expect(page.locator("#dlg")).to_be_visible()
+    expect(page.locator("#dlgMsg")).to_contain_text("v9.9.9")  # 무엇으로 바뀌는지, 잠깐 꺼진다는 것을 알려 준다
+    expect(page.locator("#dlgMsg")).to_contain_text("꺼졌다")
+    page.click("#dlgNo")  # 취소하면 아무것도 보내지 않는다
+    assert [p for p, _ in sent if p == "/api/update/install"] == []
+    page.click("#bannerUpdate")
+    page.click("#dlgYes")
+    expect(page.locator("#dlg")).to_be_hidden()
+    for _ in range(40):  # 요청이 나갈 때까지 잠깐 기다린다
+        if any(p == "/api/update/install" for p, _ in sent):
+            break
+        page.wait_for_timeout(100)
+    assert [p for p, _ in sent if p == "/api/update/install"] == ["/api/update/install"]
+
+
+def test_update_banner_explains_why_it_cannot_install_here(open_page):
+    why = "결제 대기 중인 예약이 있어서 지금은 업데이트할 수 없어요. 결제를 마친 뒤에 눌러 주세요."
+    page, _ = open_page(state(update=newer(installable=False, why_not=why)))
+    banner = page.locator("#banners .banner.info")
+    expect(banner).to_contain_text("결제 대기 중인 예약")
+    expect(page.locator("#bannerUpdate")).to_have_count(0)  # 누를 수 없는 버튼은 보여 주지 않는다
+    expect(banner.locator("a")).to_have_attribute("href", RELEASE)
+
+
+def test_install_progress_is_a_stable_banner_with_a_bar(open_page):
+    page, _ = open_page(state(update=newer(), update_install={"phase": "downloading", "done": 50, "total": 200, "error": None}))
+    banner = page.locator("#banners .banner.info")
+    expect(banner).to_contain_text("내려받는 중")
+    expect(page.locator("#upPct")).to_have_text("25%")
+    assert page.evaluate("document.querySelector('#upBar').style.width") == "25%"
+    expect(page.locator("#banners [role=progressbar]")).to_have_attribute("aria-valuenow", "25")
+    expect(page.locator("#bannerUpdate")).to_have_count(0)  # 진행 중에는 다시 누를 수 없다
+    page.evaluate("document.querySelector('#banners .banner').dataset.mark = 'same'")
+    page.wait_for_timeout(3500)  # 폴링이 돌아도 배너를 다시 그리지 않는다 (깜빡임 방지)
+    assert page.evaluate("document.querySelector('#banners .banner').dataset.mark") == "same"
+
+
+def test_install_error_shows_the_reason_and_allows_a_retry(open_page):
+    err = "받은 파일의 SHA256이 달라요 (손상됐거나 바뀌었을 수 있어요)"
+    page, _ = open_page(state(update=newer(), update_install={"phase": "error", "done": 0, "total": 0, "error": err}))
+    banner = page.locator("#banners .banner.err")
+    expect(banner).to_contain_text("업데이트에 실패했어요")
+    expect(banner).to_contain_text("SHA256")
+    expect(banner.locator("#bannerUpdate")).to_have_text("다시 시도")
+
+
+def test_settings_has_an_update_section_with_a_check_button(open_page):
+    page, sent = open_page(
+        state(version="1.4.1"),
+        posts={"/api/update/check": {"json": {"status": "latest", "update": None, "error": None, "latest": "1.4.1"}}},
+    )
+    page.click("#gear")
+    sheet = page.locator("#settings")
+    expect(sheet).to_contain_text("업데이트")
+    expect(sheet).to_contain_text("ktx v1.4.1")
+    expect(sheet).to_contain_text("최신 버전이에요")
+    page.click("#sCheck")
+    expect(page.locator(".toast").last).to_contain_text("최신 버전이에요")
+    assert ("/api/update/check", None) in sent
+
+
+def test_settings_shows_the_new_version_with_install_and_manual_download(open_page):
+    page, _ = open_page(state(version="1.4.1", update=newer()))
+    page.click("#gear")
+    sheet = page.locator("#settings")
+    expect(sheet).to_contain_text("새 버전 v9.9.9")
+    expect(sheet.locator("#sUpdate")).to_have_text("지금 업데이트")
+    expect(sheet.locator("a:has-text('직접 받기')")).to_have_attribute("href", RELEASE)
+    expect(sheet.locator("#sCheck")).to_have_count(0)
+
+
+def test_restart_during_update_is_not_shown_as_a_crash_and_the_page_reloads(open_page):
+    st = state(update=newer(), update_install={"phase": "installing", "done": 3, "total": 3, "error": None})
+    page, _ = open_page(st)
+    expect(page.locator("#banners")).to_contain_text("바꾸는 중")
+    page.evaluate("window.__marker = 1")
+    st["__down"] = True  # 옛 프로세스가 종료됐다
+    expect(page.locator("#banners")).to_contain_text("다시 시작하는 중", timeout=15000)
+    expect(page.locator("#banners")).not_to_contain_text("연결이 끊겼어요")  # 크래시처럼 보이면 안 된다
+    st.update(__down=False, version="9.9.9", update=None, update_install={"phase": "idle", "done": 0, "total": 0, "error": None})
+    page.wait_for_function("window.__marker === undefined", timeout=15000)  # 새 서버가 돌아오면 새 화면 코드를 다시 불러온다
+    expect(page.locator("#app")).to_be_visible()
 
 
 def test_no_banners_when_everything_is_fine(open_page):

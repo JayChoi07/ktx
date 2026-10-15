@@ -6,6 +6,7 @@
 - 이미 실행 중이면 새로 띄우지 않고 브라우저만 연다.
 """
 
+import contextlib
 import logging
 import os
 import socket
@@ -13,6 +14,7 @@ import sys
 import threading
 import webbrowser
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 PORT = int(os.environ.get("KTX_PORT", "8000"))
 URL = f"http://localhost:{PORT}"
@@ -28,6 +30,18 @@ def _already_running() -> bool:
 def _open_browser(*_) -> None:
     if os.environ.get("KTX_NO_BROWSER") != "1":
         webbrowser.open(URL)
+
+
+def _should_auto_open(argv: list[str]) -> bool:
+    """시작할 때 브라우저를 자동으로 연다. 업데이트 뒤 재시작(--updated)은 이미 열려 있는 탭이 알아서 다시 연결하므로 열지 않는다."""
+    return "--updated" not in argv
+
+
+def _cleanup_update_leftovers(exe: Path) -> None:
+    """업데이트가 남긴 ktx.old(옛 exe)와 받다 만 파일을 지운다. 잠겨 있으면 다음 실행에 다시 시도한다."""
+    for name in ("ktx.old", "ktx-new.exe", "ktx-new.exe.part"):
+        with contextlib.suppress(OSError):
+            exe.with_name(name).unlink(missing_ok=True)
 
 
 class _LogStream:
@@ -97,11 +111,17 @@ def main() -> None:
 
     if TRAY:
         _setup_file_logging()
+    if getattr(sys, "frozen", False):
+        # 새 exe 가 제대로 뜬 뒤에 옛 exe(ktx.old)를 지운다 — 바로 죽는 exe 라면 복구할 수 있게 남겨 둔다
+        cleanup = threading.Timer(15, _cleanup_update_leftovers, [Path(sys.executable)])
+        cleanup.daemon = True
+        cleanup.start()
 
     import uvicorn
 
-    from ktx.app import app
+    from ktx import app as app_module
 
+    app = app_module.app
     log_config = None if TRAY else uvicorn.config.LOGGING_CONFIG
     config = uvicorn.Config(app, host="127.0.0.1", port=PORT, log_level="warning", log_config=log_config)
     server = uvicorn.Server(config)
@@ -112,7 +132,8 @@ def main() -> None:
         print(f"  주소: {URL}")
         print("  이 창을 닫으면 감시가 멈춥니다. PC 절전도 꺼 두세요.")
         print("=" * 52)
-        threading.Timer(1.5, _open_browser).start()
+        if _should_auto_open(sys.argv):
+            threading.Timer(1.5, _open_browser).start()
         server.run()
         return
 
@@ -121,7 +142,8 @@ def main() -> None:
 
     t = threading.Thread(target=_serve, args=(server,), daemon=True)
     t.start()
-    threading.Timer(1.5, _open_browser).start()
+    if _should_auto_open(sys.argv):
+        threading.Timer(1.5, _open_browser).start()
 
     def quit_app(icon, *_):
         server.should_exit = True
@@ -137,6 +159,7 @@ def main() -> None:
             pystray.MenuItem("종료 (감시 멈춤)", quit_app),
         ),
     )
+    app_module.exit_app = lambda: quit_app(icon)  # 업데이트 뒤 재시작: 트레이 아이콘까지 정리하며 종료한다
     icon.run()
 
 

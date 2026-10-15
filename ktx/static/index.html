@@ -62,6 +62,8 @@
   .banner { display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; padding:14px 18px; border-radius:14px; font-weight:500; animation: rise .35s var(--ease) both; }
   .banner.err { background:var(--err-bg); color:#9b1c28; } .banner.warn { background:var(--warn-bg); color:var(--warn); } .banner.info { background:var(--soft); color:var(--text); }
   .banner b { font-weight:800; }
+  .banner .prog { flex-basis:100%; height:8px; border-radius:99px; background:rgba(25,31,40,.08); overflow:hidden; }
+  .banner .prog > i { display:block; height:100%; width:0; border-radius:99px; background:var(--pri); transition: width .4s var(--ease); }
 
   /* ---------- 레이아웃: 목록(왼쪽) + 폼(오른쪽, 고정) ---------- */
   .grid { display:grid; grid-template-columns: minmax(0,1.5fr) minmax(0,1fr); gap:20px; align-items:start; }
@@ -249,6 +251,7 @@ const OPTION_HINT = {
   SPECIAL_ONLY: '특실 자리가 날 때만 잡아요. 요금이 더 비싸요.',
 };
 let S = null, failures = 0;
+let updating = false, fastTimer = null;  // 업데이트(내려받기→교체→재시작) 진행 중이면 빠르게 폴링하고, 재시작 중 끊김을 크래시로 보여 주지 않는다
 let form = { option:'GENERAL_FIRST', train_type:'KTX', adults:1 };
 let formReady = false, wizardShown = -1, formOpened = false;
 const cards = new Map();
@@ -315,21 +318,35 @@ function makeCombo(box, id, initial, placeholder, onChange) {
 
 /* ---------------- 배너 / 상단 상태 ---------------- */
 let bannersShown = null;
+function paintProgress() {  // 진행률은 배너를 다시 그리지 않고 제자리에서 갱신한다 (다시 그리면 등장 애니메이션이 반복돼 깜빡인다)
+  const up = (S && S.update_install) || {};
+  const pct = up.phase === 'installing' ? 100 : up.total ? Math.min(100, Math.round(up.done / up.total * 100)) : 0;
+  const bar = $('upBar'), num = $('upPct');
+  if (bar) { bar.style.width = pct + '%'; bar.parentElement.setAttribute('aria-valuenow', pct); }
+  if (num) num.textContent = pct + '%';
+}
 function renderBanners() {
   const b = [];
-  if (failures >= 2) b.push(`<div class="banner err"><span><b>프로그램과 연결이 끊겼어요.</b> 프로그램이 종료됐다면 ktx를 다시 실행하세요. 그동안 <b>감시는 멈춰 있어요.</b></span></div>`);
+  if (failures >= 2) b.push(updating
+    ? `<div class="banner info"><span><b>새 버전으로 다시 시작하는 중이에요.</b> 잠시 뒤 이 창이 자동으로 다시 연결돼요.</span></div>`
+    : `<div class="banner err"><span><b>프로그램과 연결이 끊겼어요.</b> 프로그램이 종료됐다면 ktx를 다시 실행하세요. 그동안 <b>감시는 멈춰 있어요.</b></span></div>`);
   else if (S) {
     const watching = S.jobs.some(j => j.status === 'watching');
     if (S.setup.korail && !S.setup.discord && wizardStep() === 0) b.push(`<div class="banner warn"><span><b>디스코드 알림이 설정되지 않았어요.</b> 지금은 예약이 되어도 알림이 가지 않아요.${watching ? ' 감시 중인 항목이 있어요!' : ''}</span><button class="btn small" id="bannerDiscord">디스코드 연결하기</button></div>`);
     if (S.paused_for) b.push(`<div class="banner err"><span><b>코레일이 접속을 제한했어요.</b> ${Math.ceil(S.paused_for/60)}분 뒤에 자동으로 다시 시도해요. VPN이 켜져 있다면 꺼 주세요.</span></div>`);
     if (S.notify_error) b.push(`<div class="banner err"><span><b>디스코드 알림이 전송되지 않고 있어요.</b> 웹후크가 삭제되지 않았는지 확인하세요. (${esc(S.notify_error)})</span><button class="btn small" id="bannerNotify">설정 열기</button></div>`);
-    if (S.update && store.get('dismissUpdate') !== S.update.version) b.push(`<div class="banner info"><span><b>새 버전 v${esc(S.update.version)}이 나왔어요.</b> 받은 뒤 지금 실행 중인 ktx를 종료하고 새 ktx.exe로 바꿔 실행하세요. 설정과 감시 목록은 그대로 이어져요.</span><span class="row"><a href="${esc(S.update.url)}" target="_blank" rel="noopener" style="text-decoration:none"><button class="btn small" type="button">다운로드</button></a><button class="btn sub small" id="bannerUpdateLater">나중에</button></span></div>`);
+    const up = S.update_install || {}, u = S.update;
+    if (up.phase === 'downloading' || up.phase === 'installing') b.push(`<div class="banner info"><span><b>${up.phase === 'installing' ? '새 버전으로 바꾸는 중이에요.' : '새 버전을 내려받는 중이에요.'}</b> <span id="upPct">0%</span> · 끝나면 프로그램이 잠깐 꺼졌다 다시 켜지고, 이 창은 자동으로 다시 연결돼요.</span><div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="upBar"></i></div></div>`);
+    else if (up.phase === 'error') b.push(`<div class="banner err"><span><b>업데이트에 실패했어요.</b> ${esc(up.error || '')}</span>${u && u.installable ? '<button class="btn small" id="bannerUpdate">다시 시도</button>' : ''}</div>`);
+    else if (u && store.get('dismissUpdate') !== u.version) b.push(`<div class="banner info"><span><b>새 버전 v${esc(u.version)}이 나왔어요.</b> ${u.installable ? '버튼 한 번으로 바꿀 수 있어요. 설정과 감시 목록은 그대로 이어져요.' : esc(u.why_not || '받은 뒤 지금 실행 중인 ktx를 종료하고 새 ktx.exe로 바꿔 실행하세요.')}</span><span class="row">${u.installable ? '<button class="btn small" id="bannerUpdate">지금 업데이트</button>' : ''}<a href="${esc(u.url)}" target="_blank" rel="noopener" style="text-decoration:none"><button class="btn${u.installable ? ' sub' : ''} small" type="button">${u.installable ? '직접 받기' : '다운로드'}</button></a><button class="btn sub small" id="bannerUpdateLater">나중에</button></span></div>`);
   }
   const html = b.join('');
-  if (html === bannersShown) return;  // 매 폴링마다 다시 그리면 등장 애니메이션이 반복돼 깜빡인다
+  if (html === bannersShown) { paintProgress(); return; }  // 매 폴링마다 다시 그리면 등장 애니메이션이 반복돼 깜빡인다
   bannersShown = html;
   $('banners').innerHTML = html;
+  paintProgress();
   const bn = $('bannerNotify'); if (bn) bn.onclick = openSettings;
+  const bup = $('bannerUpdate'); if (bup) bup.onclick = startUpdate;
   const bu = $('bannerUpdateLater'); if (bu) bu.onclick = () => { store.set('dismissUpdate', S.update.version); bannersShown = null; renderBanners(); };
   const bd = $('bannerDiscord'); if (bd) bd.onclick = () => { store.set('skipNotify', ''); wizardShown = -1; renderWizard(); renderBanners(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 }
@@ -526,12 +543,29 @@ setInterval(() => {
 
 /* ---------------- 폴링 ---------------- */
 async function poll() {
-  try { S = await api('/api/state'); failures = 0; } catch { failures++; renderBanners(); return; }
+  try {
+    const wasDown = failures > 0;
+    S = await api('/api/state'); failures = 0;
+    if (updating && wasDown) { location.reload(); return; }  // 새 프로그램이 다시 떴다 — 새 화면 코드를 받는다
+  } catch { failures++; renderBanners(); return; }
+  const phase = S.update_install && S.update_install.phase;
+  if (phase === 'downloading' || phase === 'installing') { updating = true; fastPoll(); } else if (phase === 'error') updating = false;
   renderStatus(); renderWizard(); renderBanners();
   if (!S.setup.korail) return;
   if (!formReady && S.stations.length) initForm();
   renderJobs();
   if ($('logs')) $('logs').innerHTML = logHtml();
+}
+function fastPoll() {  // 업데이트 중에는 진행률과 재시작을 빨리 알아채도록 0.7초마다 폴링한다
+  if (fastTimer || !updating) return;
+  const tick = async () => { await poll(); fastTimer = updating ? setTimeout(tick, 700) : null; };
+  fastTimer = setTimeout(tick, 0);
+}
+async function startUpdate() {
+  if (!S || !S.update) return;
+  if (!await ask(`v${S.update.version}으로 업데이트할까요? 새 버전을 받아 바꾼 뒤 프로그램이 잠깐(약 10초) 꺼졌다 다시 켜져요. 감시는 다시 켜지면 이어서 돌아가요.`, '업데이트')) return;
+  try { await api('/api/update/install', 'POST'); updating = true; $('settings').close(); await poll(); fastPoll(); }
+  catch (err) { toast(err.message, 'err'); }
 }
 /* ---------------- 설정 시트 ---------------- */
 const logHtml = () => S.logs.map(l => `<div class="${l.level}">${esc(l.t)}  ${esc(l.msg)}</div>`).join('') || '<span class="t-small">아직 로그가 없어요.</span>';
@@ -552,10 +586,23 @@ function renderSettings() {
       <div class="chips" id="sInt">${INTERVALS.map(([v, l]) => `<button type="button" class="chip" data-v="${v}" aria-pressed="${S.interval === v}">${l}</button>`).join('')}<button type="button" class="chip" id="sCustom" aria-pressed="${!isPreset(S.interval)}">직접 입력</button></div>
       <form class="row" id="sIntForm" novalidate style="margin-top:10px;align-items:center" ${isPreset(S.interval) ? 'hidden' : ''}><input class="input" id="sIntVal" type="number" inputmode="numeric" min="${S.min_interval}" max="${S.max_interval}" step="1" value="${S.interval}" style="width:120px" aria-label="조회 간격(초)"><span class="t-small">초 (최소 ${S.min_interval}초)</span><button class="btn small">적용</button></form>
       <p class="t-small" style="margin:10px 0 0">현재 ${fmtSec(S.interval)}마다 조회</p></div>
-    <div class="set"><details class="logbox"><summary>활동 로그</summary><div class="log" id="logs">${logHtml()}</div></details>
-      <p class="t-small" style="margin-top:10px">ktx ${S.version === 'dev' ? '(개발 실행)' : 'v' + esc(S.version)}</p></div>`;
+    <div class="set"><h3>업데이트</h3><p class="t-small">ktx ${S.version === 'dev' ? '(개발 실행)' : 'v' + esc(S.version)}</p>
+      <div class="line"><span>${S.update ? `<span class="badge pri"><span class="dot"></span>새 버전 v${esc(S.update.version)}</span>` : '<span class="badge ok"><span class="dot"></span>최신 버전이에요</span>'}</span>
+        <span class="row">${S.update
+          ? (S.update.installable ? '<button class="btn small" id="sUpdate">지금 업데이트</button>' : '') + `<a href="${esc(S.update.url)}" target="_blank" rel="noopener" style="text-decoration:none"><button class="btn sub small" type="button">직접 받기</button></a>`
+          : '<button class="btn sub small" id="sCheck">지금 확인</button>'}</span></div>
+      ${S.update && !S.update.installable && S.update.why_not ? `<p class="t-small">${esc(S.update.why_not)}</p>` : ''}</div>
+    <div class="set"><details class="logbox"><summary>활동 로그</summary><div class="log" id="logs">${logHtml()}</div></details></div>`;
   const on = (id, fn) => $(id) && ($(id).onclick = fn);
   on('sTest', async () => { try { await api('/api/discord/test', 'POST'); toast('보냈어요. 디스코드를 확인하세요', 'ok'); } catch (e) { toast(e.message, 'err'); } });
+  on('sUpdate', startUpdate);
+  on('sCheck', async () => {
+    try {
+      const r = await api('/api/update/check', 'POST');
+      toast(r.status === 'available' ? `새 버전 v${r.update.version}이 있어요` : r.status === 'latest' ? '최신 버전이에요' : (r.error || '확인하지 못했어요'), r.status === 'error' ? 'err' : 'ok');
+      await poll(); renderSettings();
+    } catch (e) { toast(e.message, 'err'); }
+  });
   on('sResetDiscord', async () => { if (await ask('저장된 디스코드 웹후크를 지울까요? 알림이 오지 않게 돼요.', '지우기', true)) { await api('/api/setup/reset/discord', 'POST'); store.set('skipNotify', ''); wizardShown = -1; await poll(); renderSettings(); } });
   on('sLinkDiscord', () => { $('settings').close(); store.set('skipNotify', ''); wizardShown = -1; poll().then(() => $('wizard').scrollIntoView({ behavior: 'smooth', block: 'start' })); });
   on('sLinkKorail', () => { $('settings').close(); wizardShown = -1; poll().then(() => $('wizard').scrollIntoView({ behavior: 'smooth', block: 'start' })); });
